@@ -8,13 +8,13 @@ const db = require('./db');  // Caminho do arquivo de conexão ao banco de dados
 //const dataset = require('../datasetsapify/partidos/dataset_Partido_PAN.json'); 
 //const dataset = require('../datasetsapify/partidos/dataset_pcp_pt.json'); 
 //const dataset = require('../datasetsapify/politicos/dataset_LMontenegropm.json'); 
-//const dataset = require('../datasetsapify/politicos/dataset_NunoMeloMDN.json'); 
+const dataset = require('../datasetsapify/politicos/dataset_NunoMeloMDN.json'); 
 //const dataset = require('../datasetsapify/politicos/dataset_PNSpedronuno.json'); 
 //const dataset = require('../datasetsapify/politicos/dataset_AndreCVentura.json'); 
 //const dataset = require('../datasetsapify/politicos/dataset_ruirochaliberal.json'); 
 //const dataset = require('../datasetsapify/politicos/dataset_MRMortagua.json'); 
 //const dataset = require('../datasetsapify/politicos/dataset_ruitavares.json');
-const dataset = require('../datasetsapify/politicos/dataset_InesSousaReal.json');
+//const dataset = require('../datasetsapify/politicos/dataset_InesSousaReal.json');
 
 dataset.forEach(post => {
   const {
@@ -39,7 +39,7 @@ dataset.forEach(post => {
 
   const isRetweet = post.isRetweet ? 1 : 0;
   const socialName = "Twitter";
-  const studyId = 16;  // Defina o estudo conforme necessário
+  const studyId = 17;  // Defina o estudo conforme necessário
 
   // Usando `user.username` como `pageName`
   db.query(query, [username, pageLink, postLink, id, text, likes, replies, retweets, isRetweet, socialName, studyId], (err, result) => {

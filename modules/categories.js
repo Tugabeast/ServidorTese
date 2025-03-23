@@ -17,7 +17,7 @@ router.get('/', (req, res) => {
 // 🔹 Rota para obter categorias associadas a um estudo específico
 router.get('/study/:studyId', (req, res) => {
   const { studyId } = req.params;
-  console.log(`Recebida requisição para categorias do estudo ID: ${studyId}`); // Log para depuração
+  //console.log(`Recebida requisição para categorias do estudo ID: ${studyId}`); // Log para depuração
 
   const query = `
       SELECT c.id, c.name 
@@ -35,6 +35,36 @@ router.get('/study/:studyId', (req, res) => {
       res.json(results);
   });
 });
+
+// 🔹 Rota para obter categorias de sentimento associadas a um estudo específico
+router.get('/study/sentimentos/:studyId', (req, res) => {
+  const { studyId } = req.params;
+
+  console.log(`Recebida requisição para categorias de sentimento do estudo ID: ${studyId}`);
+
+  const query = `
+      SELECT cs.id, cs.name
+      FROM categories_sentimento cs
+      JOIN studiescategories sc ON cs.id = sc.sentimentoCategoryId
+      WHERE sc.studyId = ?;
+  `;
+
+  db.query(query, [studyId], (err, results) => {
+    if (err) {
+      console.error("❌ Erro ao buscar categorias de sentimento:", err);
+      return res.status(500).json({ message: 'Erro ao buscar categorias de sentimento', error: err });
+    }
+
+    if (results.length === 0) {
+      console.log(`⚠️ Nenhuma categoria de sentimento encontrada para studyId ${studyId}`);
+    } else {
+      console.log(`✅ Categorias de sentimento encontradas para studyId ${studyId}:`, results);
+    }
+
+    res.json(results);
+  });
+});
+
 
 
 module.exports = router;

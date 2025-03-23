@@ -5,7 +5,7 @@ const jwt = require('jsonwebtoken');
 
 // Rota para buscar estatísticas de posts classificados por user
 router.get('/user-stats', (req, res) => {
-  const { username } = req.user; // Extrai o username do token
+  const { username } = req.user;
 
   if (!username) {
     return res.status(400).json({ message: 'username não encontrado no token.' });
@@ -28,25 +28,55 @@ router.get('/user-stats', (req, res) => {
   });
 });
 
-
-//  Rota para obter as estatísticas de classificação do user
+// Rota para obter estatísticas de classificações validadas do user
 router.get('/validated-classifications', (req, res) => {
-  const username = req.user.username; 
-  const query = `
-    SELECT 
-      COUNT(DISTINCT CASE WHEN sub.correct_category = p.post_classification THEN p.postId END) AS validated,
-      COUNT(DISTINCT p.postId) - COUNT(DISTINCT CASE WHEN sub.correct_category = p.post_classification THEN p.postId END) AS not_validated
-    FROM postsclassification p
-    LEFT JOIN (
-      SELECT postId, CASE WHEN COUNT(post_classification) >= 3 THEN post_classification ELSE NULL END AS correct_category
-      FROM postsclassification 
-      GROUP BY postId, post_classification
-    ) AS sub 
-    ON p.postId = sub.postId
-    WHERE p.userId = ?
-    `;
+  const username = req.user.username;
 
-  db.query(query, [username], (err, results) => {
+  const query = `
+    WITH ValidThemes AS (
+      SELECT postId, post_classification
+      FROM postsclassification
+      GROUP BY postId, post_classification
+      HAVING COUNT(*) >= 3
+    ),
+    ValidSentiments AS (
+      SELECT postId, sentimentoCategoryId
+      FROM post_sentimento_classifications
+      GROUP BY postId, sentimentoCategoryId
+      HAVING COUNT(*) >= 3
+    ),
+    UserThemes AS (
+      SELECT postId, post_classification
+      FROM postsclassification
+      WHERE userId = ?
+    ),
+    UserSentiments AS (
+      SELECT postId, sentimentoCategoryId
+      FROM post_sentimento_classifications
+      WHERE userId = ?
+    ),
+    AllUserClassifications AS (
+      SELECT ut.postId, ut.post_classification AS category, 'theme' AS type
+      FROM UserThemes ut
+      UNION ALL
+      SELECT us.postId, us.sentimentoCategoryId AS category, 'sentiment' AS type
+      FROM UserSentiments us
+    ),
+    ValidatedClassifications AS (
+      SELECT ut.postId, 'theme' AS type
+      FROM UserThemes ut
+      JOIN ValidThemes vt ON ut.postId = vt.postId AND ut.post_classification = vt.post_classification
+      UNION ALL
+      SELECT us.postId, 'sentiment' AS type
+      FROM UserSentiments us
+      JOIN ValidSentiments vs ON us.postId = vs.postId AND us.sentimentoCategoryId = vs.sentimentoCategoryId
+    )
+    SELECT
+      (SELECT COUNT(*) FROM ValidatedClassifications) AS validated,
+      (SELECT COUNT(*) FROM AllUserClassifications) - (SELECT COUNT(*) FROM ValidatedClassifications) AS not_validated
+  `;
+
+  db.query(query, [username, username], (err, results) => {
     if (err) {
       console.error("❌ Erro ao buscar classificações validadas:", err);
       return res.status(500).json({ message: "Erro ao buscar estatísticas", error: err });
@@ -60,36 +90,70 @@ router.get('/validated-classifications', (req, res) => {
   });
 });
 
-
-
-// 🔹 Rota para obter as estatísticas de classificação de TODOS os users (com anonimização)
+// Rota para estatísticas de todos os users com anonimização
 router.get('/validated-classifications-all', (req, res) => {
-  const loggedUser = req.user.username; // Obtém o username do user logado
+  const loggedUser = req.user.username;
 
   const query = `
-    WITH RankedUsers AS (
-      SELECT 
-        userId,
-        CASE 
-          WHEN userId = ? THEN userId
-          ELSE CONCAT('Utilizador ', DENSE_RANK() OVER (ORDER BY userId)) 
-        END AS anonymizedUser
-      FROM postsclassification
-      GROUP BY userId
-    )
-    SELECT 
-      r.anonymizedUser,
-      COUNT(DISTINCT CASE WHEN sub.correct_category = p.post_classification THEN p.postId END) AS validated,
-      COUNT(DISTINCT p.postId) - COUNT(DISTINCT CASE WHEN sub.correct_category = p.post_classification THEN p.postId END) AS not_validated
-    FROM postsclassification p
-    JOIN RankedUsers r ON p.userId = r.userId
-    LEFT JOIN (
-      SELECT postId, CASE WHEN COUNT(post_classification) >= 3 THEN post_classification ELSE NULL END AS correct_category
-      FROM postsclassification 
-      GROUP BY postId, post_classification
-    ) AS sub 
-    ON p.postId = sub.postId
-    GROUP BY r.anonymizedUser
+      WITH
+      ValidThemes AS (
+        SELECT postId, post_classification
+        FROM postsclassification
+        GROUP BY postId, post_classification
+        HAVING COUNT(*) >= 3
+      ),
+      ValidSentiments AS (
+        SELECT postId, sentimentoCategoryId
+        FROM post_sentimento_classifications
+        GROUP BY postId, sentimentoCategoryId
+        HAVING COUNT(*) >= 3
+      ),
+      Users AS (
+        SELECT DISTINCT userId FROM postsclassification
+        UNION
+        SELECT DISTINCT userId FROM post_sentimento_classifications
+      ),
+      Anonymized AS (
+        SELECT
+          userId,
+          CASE
+            WHEN userId = ? THEN userId
+            ELSE CONCAT('Utilizador ', DENSE_RANK() OVER (ORDER BY userId))
+          END AS anonymizedUser
+        FROM Users
+      ),
+      UserThemeCounts AS (
+        SELECT userId, COUNT(*) AS total_theme_classifications
+        FROM postsclassification
+        GROUP BY userId
+      ),
+      UserSentimentCounts AS (
+        SELECT userId, COUNT(*) AS total_sentiment_classifications
+        FROM post_sentimento_classifications
+        GROUP BY userId
+      ),
+      UserThemeValidated AS (
+        SELECT p.userId, COUNT(*) AS validated_theme_classifications
+        FROM postsclassification p
+        JOIN ValidThemes vt ON p.postId = vt.postId AND p.post_classification = vt.post_classification
+        GROUP BY p.userId
+      ),
+      UserSentimentValidated AS (
+        SELECT ps.userId, COUNT(*) AS validated_sentiment_classifications
+        FROM post_sentimento_classifications ps
+        JOIN ValidSentiments vs ON ps.postId = vs.postId AND ps.sentimentoCategoryId = vs.sentimentoCategoryId
+        GROUP BY ps.userId
+      )
+      SELECT
+        a.anonymizedUser,
+        COALESCE(utv.validated_theme_classifications, 0) + COALESCE(usv.validated_sentiment_classifications, 0) AS validated,
+        (COALESCE(utc.total_theme_classifications, 0) + COALESCE(usc.total_sentiment_classifications, 0)) -
+        (COALESCE(utv.validated_theme_classifications, 0) + COALESCE(usv.validated_sentiment_classifications, 0)) AS not_validated
+      FROM Anonymized a
+      LEFT JOIN UserThemeCounts utc ON a.userId = utc.userId
+      LEFT JOIN UserSentimentCounts usc ON a.userId = usc.userId
+      LEFT JOIN UserThemeValidated utv ON a.userId = utv.userId
+      LEFT JOIN UserSentimentValidated usv ON a.userId = usv.userId
 
   `;
 
@@ -98,20 +162,11 @@ router.get('/validated-classifications-all', (req, res) => {
       console.error("❌ Erro ao buscar estatísticas de classificação para todos os users:", err);
       return res.status(500).json({ message: "Erro ao buscar estatísticas", error: err });
     }
-  
-    if (!Array.isArray(results)) {
-      console.error("❌ API deve retornar um array, mas recebeu:", results);
-      return res.status(500).json({ message: "Erro inesperado no formato de resposta" });
-    }
-  
+
     res.json(results);
   });
 });
 
+
+
 module.exports = router;
-
-
-
-
-
-

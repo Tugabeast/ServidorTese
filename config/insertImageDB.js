@@ -9,13 +9,13 @@ const db = require('./db');  // Caminho para o arquivo de conexão ao banco de d
 //const dataset = require('../datasetsapify/partidos/dataset_Partido_PAN.json');  
 //const dataset = require('../datasetsapify/partidos/dataset_pcp_pt.json'); 
 //const dataset = require('../datasetsapify/politicos/dataset_LMontenegropm.json'); 
-//const dataset = require('../datasetsapify/politicos/dataset_NunoMeloMDN.json'); 
+const dataset = require('../datasetsapify/politicos/dataset_NunoMeloMDN.json'); 
 //const dataset = require('../datasetsapify/politicos/dataset_PNSpedronuno.json'); 
 //const dataset = require('../datasetsapify/politicos/dataset_AndreCVentura.json');  
 //const dataset = require('../datasetsapify/politicos/dataset_ruirochaliberal.json'); 
 //const dataset = require('../datasetsapify/politicos/dataset_MRMortagua.json');
 //const dataset = require('../datasetsapify/politicos/dataset_ruitavares.json');
-const dataset = require('../datasetsapify/politicos/dataset_InesSousaReal.json');
+//const dataset = require('../datasetsapify/politicos/dataset_InesSousaReal.json');
 
 dataset.forEach(post => {
     const { user, url, id, images } = post;

@@ -21,7 +21,7 @@ router.get('/', (req, res) => {
     WHERE p.studyId IN (
         SELECT study_id FROM userstudies WHERE user_name = ?
     )
-    ORDER BY p.id ASC
+    ORDER BY RAND()
     LIMIT ? OFFSET ?;
   `;
 

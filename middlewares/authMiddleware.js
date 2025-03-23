@@ -11,7 +11,7 @@ module.exports = (req, res, next) => {
 
     try {
         const decoded = jwt.verify(token.split(' ')[1], process.env.APP_SECRET);
-        console.log('🔹 Token válido:', decoded);
+        //console.log('🔹 Token válido:', decoded);
         req.user = decoded;  // Armazena os dados do user na requisição
         next();
     } catch (err) {
