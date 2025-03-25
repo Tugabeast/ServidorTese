@@ -2,95 +2,78 @@ const express = require('express');
 const router = express.Router();
 const db = require('../config/db');
 
-// 🔹 Rota para classificar (ou atualizar classificação) de um post com várias categorias (temáticas e sentimentais)
+// 🔹 Rota única para classificar post com temáticas e sentimento (nova estrutura unificada)
 router.post('/classify', (req, res) => {
-  const { postId, studyId, categoryIds, sentimentoCategoryIds } = req.body;  // categoryIds e sentimentoCategoryIds são arrays de IDs de categorias
-  const userId = req.user.username;  // Pegando o userId do token
+  const { postId, studyId, categoryIds, sentimentoCategoryIds } = req.body;
+  const userId = req.user.username;
 
-  console.log("📩 Dados recebidos para classificação:", { postId, studyId, categoryIds, sentimentoCategoryIds, userId });
-
-  // Validação dos campos obrigatórios para classificação temática
   if (!postId || !studyId || !Array.isArray(categoryIds) || categoryIds.length === 0 || !userId) {
-    console.error("❌ Erro: Campos obrigatórios ausentes ou inválidos (classificação temática)!");
-    return res.status(400).json({ message: 'Todos os campos são obrigatórios para a classificação temática' });
+    return res.status(400).json({ message: 'Dados inválidos para classificação temática.' });
   }
 
-  // Montar múltiplas entradas para as categorias temáticas no banco de dados
-  const valuesCategories = categoryIds.map(categoryId => [postId, studyId, categoryId, userId]);
+  // Prepara valores temáticos
+  const thematicValues = categoryIds.map(categoryId => [postId, studyId, categoryId, userId]);
 
-  // Inserir ou atualizar a classificação do post para múltiplas categorias temáticas
-  const queryCategories = `
+  // Prepara valor de sentimento (espera apenas 1)
+  const sentimentValue = (
+    Array.isArray(sentimentoCategoryIds) && sentimentoCategoryIds.length > 0
+      ? [[postId, studyId, sentimentoCategoryIds[0], userId]]
+      : []
+  );
+
+  // Query genérica (para qualquer categoria)
+  const insertQuery = `
     INSERT INTO postsclassification (postId, studyId, post_classification, userId)
     VALUES ?
     ON DUPLICATE KEY UPDATE post_classification = VALUES(post_classification)
   `;
 
-  // Se houver categorias sentimentais, montar entradas para elas
-  let querySentimentoCategories = null;
-  let valuesSentimentoCategories = null;
-
-  if (Array.isArray(sentimentoCategoryIds) && sentimentoCategoryIds.length > 0) {
-    valuesSentimentoCategories = sentimentoCategoryIds.map(sentimentoCategoryId => [postId, studyId, sentimentoCategoryId, userId]);
-
-    // Query para categorias de sentimento
-    querySentimentoCategories = `
-      INSERT INTO post_sentimento_classifications (postId, studyId, sentimentoCategoryId, userId)
-      VALUES ?
-      ON DUPLICATE KEY UPDATE sentimentoCategoryId = VALUES(sentimentoCategoryId)
-    `;
-  }
-
-  // Iniciar transação
-  db.beginTransaction((err) => {
+  db.beginTransaction(err => {
     if (err) {
       console.error("❌ Erro ao iniciar transação:", err);
-      return res.status(500).json({ message: 'Erro ao classificar post', error: err });
+      return res.status(500).json({ message: 'Erro interno.' });
     }
 
-    // Executar query para categorias temáticas
-    db.query(queryCategories, [valuesCategories], (err, result) => {
+    db.query(insertQuery, [thematicValues], (err) => {
       if (err) {
         return db.rollback(() => {
-          console.error("❌ Erro ao classificar post (temáticas):", err);
-          return res.status(500).json({ message: 'Erro ao classificar post (temáticas)', error: err });
+          console.error("❌ Erro ao inserir categorias temáticas:", err);
+          return res.status(500).json({ message: 'Erro ao salvar categorias temáticas.' });
         });
       }
 
-      // Se houver categorias sentimentais, executar a query
-      if (querySentimentoCategories && valuesSentimentoCategories) {
-        db.query(querySentimentoCategories, [valuesSentimentoCategories], (err, result) => {
+      if (sentimentValue.length > 0) {
+        db.query(insertQuery, [sentimentValue], (err) => {
           if (err) {
             return db.rollback(() => {
-              console.error("❌ Erro ao classificar post (sentimentos):", err);
-              return res.status(500).json({ message: 'Erro ao classificar post (sentimentos)', error: err });
+              console.error("❌ Erro ao inserir categoria de sentimento:", err);
+              return res.status(500).json({ message: 'Erro ao salvar categoria de sentimento.' });
             });
           }
 
-          // Commit da transação após ambas as classificações
-          db.commit((err) => {
+          db.commit(err => {
             if (err) {
               return db.rollback(() => {
-                console.error("❌ Erro ao confirmar transação:", err);
-                return res.status(500).json({ message: 'Erro ao confirmar classificação', error: err });
+                console.error("❌ Erro no commit da transação:", err);
+                return res.status(500).json({ message: 'Erro ao confirmar classificação.' });
               });
             }
 
-            console.log("✅ Post classificado com sucesso em várias categorias (temáticas e sentimentais)!");
-            return res.status(201).json({ message: 'Post classificado com sucesso em várias categorias!' });
+            console.log("✅ Classificação temática e de sentimento salva com sucesso!");
+            res.status(201).json({ message: 'Classificação completa realizada!' });
           });
         });
       } else {
-        // Se não houver categorias sentimentais, só fazer o commit para as temáticas
-        db.commit((err) => {
+        db.commit(err => {
           if (err) {
             return db.rollback(() => {
-              console.error("❌ Erro ao confirmar transação:", err);
-              return res.status(500).json({ message: 'Erro ao confirmar classificação', error: err });
+              console.error("❌ Erro no commit (só temáticas):", err);
+              return res.status(500).json({ message: 'Erro ao confirmar classificação temática.' });
             });
           }
 
-          console.log("✅ Post classificado com sucesso em várias categorias (somente temáticas)!");
-          return res.status(201).json({ message: 'Post classificado com sucesso em várias categorias!' });
+          console.log("✅ Classificação temática salva (sem sentimento)!");
+          res.status(201).json({ message: 'Classificação temática realizada!' });
         });
       }
     });
@@ -98,58 +81,40 @@ router.post('/classify', (req, res) => {
 });
 
 
-// 🔹 Rota para obter os posts já classificados com múltiplas categorias (temáticas e sentimentais)
+// 🔹 Obter posts classificados (temáticas + sentimento) para o user logado
 router.get('/classified-posts', (req, res) => {
-  const { username } = req.user;  // Obtém o username do token
+  const username = req.user.username;
 
-  if (!username) {
-    return res.status(400).json({ message: 'Erro: User não autenticado.' });
-  }
-
-  const queryCategories = `
-    SELECT postId, post_classification
-    FROM postsclassification
-    WHERE userId = ?
+  const query = `
+    SELECT pc.postId, pc.post_classification, c.categoryType
+    FROM postsclassification pc
+    JOIN categories c ON pc.post_classification = c.id
+    WHERE pc.userId = ?
   `;
 
-  const querySentimentoCategories = `
-    SELECT postId, sentimentoCategoryId
-    FROM post_sentimento_classifications
-    WHERE userId = ?
-  `;
-
-  db.query(queryCategories, [username], (err, resultsCategories) => {
+  db.query(query, [username], (err, results) => {
     if (err) {
-      console.error("Erro ao buscar posts classificados (temáticas):", err);
-      return res.status(500).json({ message: 'Erro ao buscar posts classificados (temáticas)', error: err });
+      console.error("❌ Erro ao buscar classificações:", err);
+      return res.status(500).json({ message: 'Erro ao buscar classificações.', error: err });
     }
 
     const classifiedPosts = {};
-    resultsCategories.forEach(row => {
-      if (!classifiedPosts[row.postId]) {
-        classifiedPosts[row.postId] = {
-          thematic: [],
-          sentiment: [],
-        };
-      }
-      classifiedPosts[row.postId].thematic.push(row.post_classification);  // Classificações temáticas
-    });
 
-    db.query(querySentimentoCategories, [username], (err, resultsSentimentos) => {
-      if (err) {
-        console.error("Erro ao buscar posts classificados (sentimentos):", err);
-        return res.status(500).json({ message: 'Erro ao buscar posts classificados (sentimentos)', error: err });
+    results.forEach(({ postId, post_classification, categoryType }) => {
+      if (!classifiedPosts[postId]) {
+        classifiedPosts[postId] = { thematic: [], sentiment: [] };
       }
 
-      resultsSentimentos.forEach(row => {
-        if (classifiedPosts[row.postId]) {
-          classifiedPosts[row.postId].sentiment.push(row.sentimentoCategoryId);  // Classificações sentimentais
-        }
-      });
-
-      res.json(classifiedPosts);
+      if (categoryType === 'tematicas') {
+        classifiedPosts[postId].thematic.push(post_classification);
+      } else if (categoryType === 'sentimento') {
+        classifiedPosts[postId].sentiment = [post_classification]; // só pode 1
+      }
     });
+
+    res.json(classifiedPosts);
   });
 });
+
 
 module.exports = router;
