@@ -9,6 +9,8 @@ const registerRoutes = require('./modules/register');
 const loginRoutes = require('./modules/login');
 const statsRoutes = require('./modules/stats');
 const profileRoutes = require('./modules/profile'); 
+const usersRoutes = require('./modules/users');
+const studiesRoutes = require('./modules/studies');
 
 const app = express();
 
@@ -24,6 +26,7 @@ app.use('/categories', authMiddleware, categoriesRoutes);
 app.use('/classifications', authMiddleware, classificationsRoutes);
 app.use('/stats', authMiddleware, statsRoutes); 
 app.use('/profile', authMiddleware, profileRoutes);
-
+app.use('/users', authMiddleware, usersRoutes);
+app.use('/studies', studiesRoutes);
 
 module.exports = app;

@@ -16,7 +16,7 @@ router.post('/', async (req, res) => {
     if (err) return res.status(500).json({ message: 'Erro no servidor', error: err });
 
     if (results.length > 0) {
-      return res.status(409).json({ message: 'Uutilizador ou email já registado' });
+      return res.status(409).json({ message: 'Utilizador ou email já registado' });
     }
 
     // Criptografa a senha 

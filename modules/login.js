@@ -48,6 +48,7 @@ router.post('/', (req, res) => {
         message: 'Login realizado com sucesso',
         token: token,  // Manda o token para o cliente
         type: user.type,
+        username: user.username,
       });
     } catch (err) {
       console.error("❌ Erro ao validar a password:", err);
