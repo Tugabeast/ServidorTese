@@ -17,8 +17,8 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-app.use('/login', loginRoutes);
-app.use('/register', registerRoutes);
+
+
 
 // 🔒 Proteger as rotas usando o middleware
 app.use('/posts', authMiddleware, postsRoutes);
@@ -26,7 +26,7 @@ app.use('/categories', authMiddleware, categoriesRoutes);
 app.use('/classifications', authMiddleware, classificationsRoutes);
 app.use('/stats', authMiddleware, statsRoutes); 
 app.use('/profile', authMiddleware, profileRoutes);
-app.use('/users', authMiddleware, usersRoutes);
+app.use('/users', usersRoutes);
 app.use('/studies', studiesRoutes);
 
 module.exports = app;
