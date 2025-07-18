@@ -3,36 +3,63 @@ const router = express.Router();
 const bcrypt = require('bcrypt');
 const db = require('../config/db');
 
-// Rota para alterar a password
-router.post('/change-password', async (req, res) => {
-  const { username, currentPassword, newPassword } = req.body;
+// 🔹 ATUALIZAR PERFIL (USERNAME e/ou PASSWORD)
+router.put('/update-profile', async (req, res) => {
+    const { currentUsername, newUsername, currentPassword, newPassword } = req.body;
 
-  // Verifique se o user existe
-  const query = 'SELECT * FROM users WHERE username = ?';
-  db.query(query, [username], async (err, results) => {
-    if (err || results.length === 0) {
-      return res.status(400).json({ message: 'User não encontrado' });
+    if (!currentUsername || (!newUsername && !newPassword)) {
+        return res.status(400).json({ message: 'Campos obrigatórios em falta.' });
     }
 
-    const user = results[0];
-    const passwordMatches = await bcrypt.compare(currentPassword, user.password);
+    const query = 'SELECT * FROM user WHERE username = ?';
+    db.query(query, [currentUsername], async (err, results) => {
+        if (err || results.length === 0) {
+            return res.status(404).json({ message: 'Utilizador não encontrado.' });
+        }
 
-    if (!passwordMatches) {
-      return res.status(400).json({ message: 'Password atual incorreta' });
-    }
+        const user = results[0];
 
-    // Encripta a nova password e atualiza
-    const hashedPassword = await bcrypt.hash(newPassword, 10);
-    const updateQuery = 'UPDATE users SET password = ? WHERE username = ?';
+        // Verifica se novo username já existe
+        if (newUsername) {
+            const usernameCheckQuery = 'SELECT * FROM user WHERE username = ?';
+            const [usernameCheck] = await db.promise().query(usernameCheckQuery, [newUsername]);
+            if (usernameCheck.length > 0) {
+                return res.status(409).json({ message: 'Username já existe.' });
+            }
+        }
 
-    db.query(updateQuery, [hashedPassword, username], (err, result) => {
-      if (err) {
-        return res.status(500).json({ message: 'Erro ao atualizar a password' });
-      }
+        // Verifica password apenas se o user quiser alterar a password
+        if (newPassword) {
+            const passwordMatches = await bcrypt.compare(currentPassword, user.password);
+            if (!passwordMatches) {
+                return res.status(400).json({ message: 'Password atual incorreta.' });
+            }
+        }
 
-      return res.status(200).json({ message: 'Password alterada com sucesso' });
+        let queryUpdate = 'UPDATE user SET ';
+        const params = [];
+        if (newUsername) {
+            queryUpdate += 'username = ?, ';
+            params.push(newUsername);
+        }
+        if (newPassword) {
+            const hashedPassword = await bcrypt.hash(newPassword, 10);
+            queryUpdate += 'password = ?, ';
+            params.push(hashedPassword);
+        }
+        queryUpdate += 'updatedAt = NOW(), updatedBy = ? WHERE username = ?';
+        params.push(currentUsername); // updatedBy
+        params.push(currentUsername); // WHERE username = ?
+
+        db.query(queryUpdate, params, (err) => {
+            if (err) {
+                return res.status(500).json({ message: 'Erro ao atualizar perfil.', error: err });
+            }
+            res.status(200).json({ message: 'Perfil atualizado com sucesso.' });
+        });
+
     });
-  });
 });
+
 
 module.exports = router;

@@ -1,0 +1,85 @@
+const express = require('express');
+const router = express.Router();
+const db = require('../config/db');
+
+// 🔹 LISTAR CATEGORIAS ASSOCIADAS (filtrar por temáticas / sentimento via query param)
+router.get('/:studyId/categories', (req, res) => {
+    const { studyId } = req.params;
+    const { type } = req.query;
+
+    const query = `
+        SELECT c.id, c.name, c.categoryType
+        FROM categories c
+        JOIN studiescategories sc ON c.id = sc.categoryId
+        WHERE sc.studyId = ? ${type ? 'AND c.categoryType = ?' : ''}
+        ORDER BY c.categoryType, c.name
+    `;
+
+    const params = type ? [studyId, type] : [studyId];
+
+    db.query(query, params, (err, results) => {
+        if (err) return res.status(500).json({ message: 'Erro ao buscar categorias do estudo.', error: err });
+        res.json(results);
+    });
+});
+
+// 🔹 LISTAR CATEGORIAS DISPONÍVEIS (não associadas ao estudo)
+router.get('/:studyId/categories/available', (req, res) => {
+    const { studyId } = req.params;
+    const query = `
+        SELECT * FROM categories c
+        WHERE c.id NOT IN (
+            SELECT categoryId FROM studiescategories WHERE studyId = ?
+        )
+        ORDER BY c.categoryType, c.name
+    `;
+    db.query(query, [studyId], (err, results) => {
+        if (err) return res.status(500).json({ message: 'Erro ao buscar categorias disponíveis.', error: err });
+        res.json(results);
+    });
+});
+
+// 🔹 ASSOCIAR CATEGORIA A ESTUDO
+router.post('/:studyId/categories', (req, res) => {
+    const { categoryId, addedBy } = req.body;
+    const { studyId } = req.params;
+
+    if (!categoryId || !addedBy) {
+        return res.status(400).json({ message: 'Campos obrigatórios em falta.' });
+    }
+
+    const checkQuery = `
+        SELECT * FROM studiescategories WHERE studyId = ? AND categoryId = ?
+    `;
+    db.query(checkQuery, [studyId, categoryId], (err, results) => {
+        if (err) return res.status(500).json({ message: 'Erro ao verificar duplicação.', error: err });
+
+        if (results.length > 0) {
+            return res.status(409).json({ message: 'Esta categoria já está associada.' });
+        }
+
+        const insertQuery = `
+            INSERT INTO studiescategories (studyId, categoryId, addedBy, createdAt)
+            VALUES (?, ?, ?, NOW())
+        `;
+        db.query(insertQuery, [studyId, categoryId, addedBy], (err) => {
+            if (err) return res.status(500).json({ message: 'Erro ao associar categoria.', error: err });
+            res.status(201).json({ message: 'Categoria associada com sucesso.' });
+        });
+    });
+});
+
+// 🔹 REMOVER ASSOCIAÇÃO
+router.delete('/:studyId/categories/:categoryId', (req, res) => {
+    const { studyId, categoryId } = req.params;
+    const query = `
+        DELETE FROM studiescategories WHERE studyId = ? AND categoryId = ?
+    `;
+    db.query(query, [studyId, categoryId], (err, result) => {
+        if (err) return res.status(500).json({ message: 'Erro ao desassociar categoria.', error: err });
+        if (result.affectedRows === 0) return res.status(404).json({ message: 'Associação não encontrada.' });
+        res.json({ message: 'Categoria desassociada com sucesso.' });
+    });
+});
+
+module.exports = router;
