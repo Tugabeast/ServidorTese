@@ -1,86 +1,159 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../config/db');
+const axios = require('axios');
 
-// 🔹 LISTAR POSTS (COM PAGINAÇÃO E IMAGENS)
+
+// 🔹 LISTAR POSTS DOS ESTUDOS DO UTILIZADOR
 router.get('/', (req, res) => {
-    const userName = req.user.username;
-    const limit = parseInt(req.query.limit, 10) || 10;
-    const page = parseInt(req.query.page, 10) || 1;
-    const offset = (page - 1) * limit;
+    const userId = req.user?.id;
+
+    console.log('➡️ Requisição para /posts recebida');
+    console.log('🔐 Utilizador autenticado:', req.user);
+
+    if (!userId) {
+        console.error('❌ req.user.id está undefined');
+        return res.status(401).json({ message: 'Token inválido ou utilizador não autenticado.' });
+    }
 
     const query = `
-        SELECT p.id, p.pageName, IFNULL(p.details, '') AS details, p.likesCount, p.commentsCount, p.sharesCount, p.studyId
-        FROM posts p
-        WHERE p.studyId IN (
-            SELECT study_id FROM userstudies WHERE user_name = ?
-        )
-        ORDER BY RAND()
-        LIMIT ? OFFSET ?;
+        SELECT DISTINCT p.id, p.pageName, IFNULL(p.details, '') AS details,
+            p.likesCount, p.commentsCount, p.sharesCount, p.studyId,
+            s.name AS studyName
+        FROM post p
+        INNER JOIN study s ON p.studyId = s.id
+        WHERE s.addedBy = ?
     `;
+
 
     const imagesQuery = `
-        SELECT pi.post_id, pi.image_data, pi.isFrontPage
-        FROM posts_image pi
-        WHERE pi.post_id IN (?)
+        SELECT i.postId, i.image_data, i.isFrontPage
+        FROM image i
+        WHERE i.postId IN (?);
     `;
 
-    const countQuery = `
-        SELECT COUNT(*) AS total FROM posts p
-        WHERE p.studyId IN (
-            SELECT study_id FROM userstudies WHERE user_name = ?
-        );
-    `;
+    console.log('📥 Executando query de posts...');
+    db.query(query, [req.user.username], (err, postsResults) => {
+        if (err) {
+            console.error('❌ Erro ao buscar posts:', err);
+            return res.status(500).json({ message: 'Erro ao buscar posts.', error: err });
+        }
 
-    db.query(countQuery, [userName], (err, countResult) => {
-        if (err) return res.status(500).json({ message: 'Erro ao contar os posts.', error: err });
+        console.log('✅ Posts encontrados:', postsResults.length);
 
-        const totalPosts = countResult[0].total;
-        db.query(query, [userName, limit, offset], (err, postsResults) => {
-            if (err) return res.status(500).json({ message: 'Erro ao buscar posts.', error: err });
+        const postIds = postsResults.map(post => post.id);
+        if (postIds.length === 0) {
+            console.log('⚠️ Nenhum post encontrado para os estudos do utilizador.');
+            return res.json({ posts: [] });
+        }
 
-            const postIds = postsResults.map(post => post.id);
-            if (postIds.length === 0) {
-                return res.json({ posts: [], currentPage: page, total: totalPosts });
+        console.log('🔎 IDs dos posts encontrados:', postIds);
+
+        db.query(imagesQuery, [postIds], (err, imagesResults) => {
+            if (err) {
+                console.error('❌ Erro ao buscar imagens:', err);
+                return res.status(500).json({ message: 'Erro ao buscar imagens.', error: err });
             }
 
-            db.query(imagesQuery, [postIds], (err, imagesResults) => {
-                if (err) return res.status(500).json({ message: 'Erro ao buscar imagens.', error: err });
+            console.log('🖼️ Imagens retornadas do banco:', imagesResults.length);
 
-                const imagesByPostId = {};
-                imagesResults.forEach(img => {
-                    if (!imagesByPostId[img.post_id]) {
-                        imagesByPostId[img.post_id] = [];
-                    }
-                    imagesByPostId[img.post_id].push({
-                        image_data: img.image_data.toString('base64'),
-                        isFrontPage: img.isFrontPage
-                    });
+            const imagesByPostId = {};
+            imagesResults.forEach(img => {
+                if (!img.image_data) {
+                    console.warn(`⚠️ Imagem nula ignorada para o postId: ${img.postId}`);
+                    return;
+                }
+
+                if (!imagesByPostId[img.postId]) {
+                    imagesByPostId[img.postId] = [];
+                }
+
+                imagesByPostId[img.postId].push({
+                    image_data: img.image_data.toString('base64'),
+                    isFrontPage: img.isFrontPage
                 });
-
-                const posts = postsResults.map(post => ({
-                    id: post.id,
-                    pageName: post.pageName,
-                    details: post.details,
-                    likesCount: post.likesCount,
-                    commentsCount: post.commentsCount,
-                    sharesCount: post.sharesCount,
-                    studyId: post.studyId,
-                    images: imagesByPostId[post.id] || []
-                }));
-
-                res.json({ posts, currentPage: page, total: totalPosts });
             });
+
+            const posts = postsResults.map(post => ({
+                id: post.id,
+                pageName: post.pageName,
+                details: post.details,
+                likesCount: post.likesCount,
+                commentsCount: post.commentsCount,
+                sharesCount: post.sharesCount,
+                studyId: post.studyId,
+                images: imagesByPostId[post.id] || []
+            }));
+
+            console.log('📤 Enviando posts ao frontend...');
+            res.json({ posts });
         });
     });
 });
 
+
+// 🔹 DETALHE DE UM POST
 router.get('/:id', (req, res) => {
     const { id } = req.params;
-    db.query('SELECT * FROM posts WHERE id = ?', [id], (err, results) => {
-        if (err) return res.status(500).json({ message: 'Erro ao buscar post.', error: err });
+    db.query('SELECT * FROM post WHERE id = ?', [id], (err, results) => {
+        if (err) {
+            console.error('❌ Erro ao buscar post por ID:', err);
+            return res.status(500).json({ message: 'Erro ao buscar post.', error: err });
+        }
         res.json(results[0]);
     });
+});
+
+// 🔹 IMPORTAR JSON DE POSTS VIA FRONTEND
+router.post('/import', async (req, res) => {
+    const { posts, studyId } = req.body;
+
+    if (!Array.isArray(posts) || !studyId) {
+        return res.status(400).json({ message: 'Formato de dados inválido ou studyId em falta.' });
+    }
+
+    for (const post of posts) {
+        const { user, url, username, id, text, likes, replies, retweets, images = [] } = post;
+
+        const postLink = url;
+        const pageLink = user.url;
+        const pageName = username;
+
+        const insertPostQuery = `
+            INSERT INTO post (pageName, pageLink, postLink, postId, details,
+                              likesCount, commentsCount, sharesCount,
+                              isRetweet, socialName, studyId, createdAt)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+        `;
+
+        try {
+            const [insertResult] = await db.promise().query(insertPostQuery, [
+                pageName, pageLink, postLink, id, text, likes, replies, retweets, 0, 'Twitter', studyId
+            ]);
+
+            const postId = insertResult.insertId;
+
+            for (let i = 0; i < images.length; i++) {
+                try {
+                    const imageRes = await axios.get(images[i], { responseType: 'arraybuffer' });
+                    const imageData = Buffer.from(imageRes.data, 'binary');
+                    const isFrontPage = i === 0 ? 1 : 0;
+
+                    await db.promise().query(`
+                        INSERT INTO image (image_data, isFrontPage, postId)
+                        VALUES (?, ?, ?)
+                    `, [imageData, isFrontPage, postId]);
+
+                } catch (imgErr) {
+                    console.warn(`⚠️ Erro ao importar imagem ${images[i]}:`, imgErr);
+                }
+            }
+        } catch (err) {
+            console.error('❌ Erro ao importar post:', err);
+        }
+    }
+
+    res.status(201).json({ message: 'Importação concluída com sucesso.' });
 });
 
 module.exports = router;

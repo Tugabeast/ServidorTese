@@ -2,10 +2,24 @@ const express = require('express');
 const router = express.Router();
 const db = require('../config/db');
 
-// 🔹 LISTAR TODAS AS CATEGORIAS
+// 🔹 LISTAR TODAS AS CATEGORIAS (somente das perguntas do utilizador)
 router.get('/', (req, res) => {
-    const query = 'SELECT * FROM categories ORDER BY categoryType, name';
-    db.query(query, (err, results) => {
+    const { username } = req.query;
+
+    if (!username) {
+        return res.status(400).json({ message: 'Nome de utilizador não fornecido.' });
+    }
+
+    const query = `
+        SELECT c.*, q.question AS questionName
+        FROM categories c
+        LEFT JOIN question q ON c.questionId = q.id
+        LEFT JOIN study s ON q.studyId = s.id
+        WHERE s.addedBy = ?
+        ORDER BY c.categoryType, c.name
+    `;
+
+    db.query(query, [username], (err, results) => {
         if (err) return res.status(500).json({ message: 'Erro ao buscar categorias.', error: err });
         res.json(results);
     });
@@ -13,9 +27,9 @@ router.get('/', (req, res) => {
 
 // 🔹 CRIAR NOVA CATEGORIA
 router.post('/', (req, res) => {
-    const { name, categoryType, addedBy } = req.body;
+    const { name, categoryType, questionId } = req.body;
 
-    if (!name || !categoryType || !addedBy) {
+    if (!name || !categoryType || !questionId) {
         return res.status(400).json({ message: 'Campos obrigatórios em falta.' });
     }
 
@@ -28,10 +42,10 @@ router.post('/', (req, res) => {
         }
 
         const insertQuery = `
-            INSERT INTO categories (name, categoryType, addedBy, createdAt, updatedAt)
-            VALUES (?, ?, ?, NOW(), NOW())
+            INSERT INTO categories (name, categoryType, questionId, createdAt)
+            VALUES (?, ?, ?, NOW())
         `;
-        db.query(insertQuery, [name, categoryType, addedBy], (err) => {
+        db.query(insertQuery, [name, categoryType, questionId], (err) => {
             if (err) return res.status(500).json({ message: 'Erro ao criar categoria.', error: err });
             res.status(201).json({ message: 'Categoria criada com sucesso.' });
         });
@@ -40,19 +54,19 @@ router.post('/', (req, res) => {
 
 // 🔹 ATUALIZAR CATEGORIA
 router.put('/:categoryId', (req, res) => {
-    const { name, categoryType, updatedBy } = req.body;
+    const { name, categoryType, questionId } = req.body;
     const { categoryId } = req.params;
 
-    if (!name || !categoryType || !updatedBy) {
+    if (!name || !categoryType || !questionId) {
         return res.status(400).json({ message: 'Campos obrigatórios em falta.' });
     }
 
     const query = `
         UPDATE categories
-        SET name = ?, categoryType = ?, updatedBy = ?, updatedAt = NOW()
+        SET name = ?, categoryType = ?, questionId = ?
         WHERE id = ?
     `;
-    db.query(query, [name, categoryType, updatedBy, categoryId], (err) => {
+    db.query(query, [name, categoryType, questionId, categoryId], (err) => {
         if (err) return res.status(500).json({ message: 'Erro ao atualizar categoria.', error: err });
         res.json({ message: 'Categoria atualizada com sucesso.' });
     });
