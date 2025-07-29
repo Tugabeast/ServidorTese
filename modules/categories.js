@@ -20,12 +20,12 @@ router.get('/', (req, res) => {
     `;
 
     db.query(query, [username], (err, results) => {
-        if (err) return res.status(500).json({ message: 'Erro ao buscar categorias.', error: err });
+        if (err) return res.status(500).json({ message: 'Erro ao procurar categorias.', error: err });
         res.json(results);
     });
 });
 
-// 🔹 CRIAR NOVA CATEGORIA
+// CRIAR NOVA CATEGORIA
 router.post('/', (req, res) => {
     const { name, categoryType, questionId } = req.body;
 
@@ -52,7 +52,7 @@ router.post('/', (req, res) => {
     });
 });
 
-// 🔹 ATUALIZAR CATEGORIA
+// ATUALIZAR CATEGORIA
 router.put('/:categoryId', (req, res) => {
     const { name, categoryType, questionId } = req.body;
     const { categoryId } = req.params;
@@ -72,7 +72,7 @@ router.put('/:categoryId', (req, res) => {
     });
 });
 
-// 🔹 ELIMINAR CATEGORIA
+// ELIMINAR CATEGORIA
 router.delete('/:categoryId', (req, res) => {
     const { categoryId } = req.params;
     db.query('DELETE FROM categories WHERE id = ?', [categoryId], (err, result) => {
