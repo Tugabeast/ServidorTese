@@ -3,7 +3,7 @@ const router = express.Router();
 const bcrypt = require('bcrypt');
 const db = require('../config/db');
 
-// 🔹 ATUALIZAR PERFIL (USERNAME e/ou PASSWORD)
+// ATUALIZAR PERFIL (USERNAME e/ou PASSWORD)
 router.put('/update-profile', async (req, res) => {
     const { currentUsername, newUsername, currentPassword, newPassword } = req.body;
 

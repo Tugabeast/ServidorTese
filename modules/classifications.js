@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../config/db');
 
-// 🔹 CLASSIFICAR POST
+// CLASSIFICAR POST
 router.post('/', (req, res) => {
     const { postId, studyId, categoryIds, sentimentoCategoryIds } = req.body;
     const userId = req.user.username;
@@ -44,7 +44,7 @@ router.post('/', (req, res) => {
     });
 });
 
-// 🔹 CLASSIFICAÇÕES DO USER LOGADO
+// CLASSIFICAÇÕES DO USER com sessao iniciada
 router.get('/user', (req, res) => {
     const username = req.user.username;
 

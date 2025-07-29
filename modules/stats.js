@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../config/db');
 
-// 🔹 ESTATÍSTICAS DO USER LOGADO
+//  ESTATÍSTICAS DO USER com sessao iniciada
 router.get('/user', (req, res) => {
   const username = req.user.username;
   const query = `
@@ -41,13 +41,13 @@ router.get('/user', (req, res) => {
     FROM WeightedValidations wv;
   `;
   db.query(query, [username], (err, results) => {
-    if (err) return res.status(500).json({ message: 'Erro ao buscar estatísticas.', error: err });
+    if (err) return res.status(500).json({ message: 'Erro ao procurar estatísticas.', error: err });
     res.json(results[0] || { validated: 0, not_validated: 0 });
   });
 });
 
 
-// 🔹 ESTATÍSTICAS DE TODOS (ANONIMIZADAS)
+// ESTATÍSTICAS DE TODOS os utilizadores com classificações feitas(ANONIMIZADAS)
 router.get('/general', (req, res) => {
   const loggedUser = req.user.username;
   const userType = req.user.type;
@@ -109,7 +109,7 @@ router.get('/general', (req, res) => {
   `;
 
   db.query(query, [userType, loggedUser], (err, results) => {
-    if (err) return res.status(500).json({ message: 'Erro ao buscar estatísticas.', error: err });
+    if (err) return res.status(500).json({ message: 'Erro ao procurar estatísticas.', error: err });
     res.json(results);
   });
 });

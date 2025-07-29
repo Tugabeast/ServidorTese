@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../config/db');
 
-// 🔹 LISTAR ESTUDOS DE UM UTILIZADOR
+// LISTAR ESTUDOS DE UM UTILIZADOR
 router.get('/', (req, res) => {
     const { username } = req.query;
 
@@ -19,7 +19,7 @@ router.get('/', (req, res) => {
         ORDER BY createdAt DESC
     `;
     db.query(query, [username], (err, results) => {
-        if (err) return res.status(500).json({ message: 'Erro ao buscar estudos.', error: err });
+        if (err) return res.status(500).json({ message: 'Erro ao procurar estudos.', error: err });
         res.json(results);
     });
 });

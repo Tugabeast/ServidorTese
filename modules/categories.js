@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../config/db');
 
-// 🔹 LISTAR TODAS AS CATEGORIAS (somente das perguntas do utilizador)
+// LISTAR TODAS AS CATEGORIAS
 router.get('/', (req, res) => {
     const { username } = req.query;
 

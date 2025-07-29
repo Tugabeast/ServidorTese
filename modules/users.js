@@ -10,12 +10,12 @@ router.get('/', (req, res) => {
         FROM user
     `;
     db.query(query, (err, results) => {
-        if (err) return res.status(500).json({ message: 'Erro ao buscar utilizadores', error: err });
+        if (err) return res.status(500).json({ message: 'Erro ao procurar utilizadores', error: err });
         res.status(200).json(results);
     });
 });
 
-// rota para obter user pode id
+// rota para obter user por id
 router.get('/:userId', (req, res) => {
     const { userId } = req.params;
     const query = `
@@ -24,13 +24,13 @@ router.get('/:userId', (req, res) => {
         WHERE id = ?
     `;
     db.query(query, [userId], (err, results) => {
-        if (err) return res.status(500).json({ message: 'Erro ao buscar utilizador', error: err });
+        if (err) return res.status(500).json({ message: 'Erro ao procurar utilizador', error: err });
         if (results.length === 0) return res.status(404).json({ message: 'Utilizador não encontrado' });
         res.status(200).json(results[0]);
     });
 });
 
-// rota para adicionar um utilizador (ADMIN OU INVESTIGADOR)
+// rota para adicionar um utilizador ( sendo ADMIN )
 router.post('/', async (req, res) => {
     const { username, password, email, type, createdBy } = req.body;
 
@@ -105,17 +105,67 @@ router.put('/:userId', async (req, res) => {
     }
 });
 
-// rota para apagar um utilizador
+// rota para eliminar um utilizador
 router.delete('/:userId', (req, res) => {
     const { userId } = req.params;
 
     const query = 'DELETE FROM user WHERE id = ?';
     db.query(query, [userId], (err, result) => {
-        if (err) return res.status(500).json({ message: 'Erro ao apagar utilizador', error: err });
+        if (err) return res.status(500).json({ message: 'Erro ao eliminar utilizador', error: err });
         if (result.affectedRows === 0) return res.status(404).json({ message: 'Utilizador não encontrado.' });
 
         res.status(200).json({ message: 'Utilizador removido com sucesso.' });
     });
 });
+
+
+// Associar utilizador a um estudo
+router.post('/:userId/studies', (req, res) => {
+  const { userId } = req.params;
+  const { studyId } = req.body;
+
+  if (!studyId) return res.status(400).json({ message: 'ID do estudo em falta.' });
+
+  const checkQuery = 'SELECT * FROM user_study WHERE userId = ? AND studyId = ?';
+  db.query(checkQuery, [userId, studyId], (err, result) => {
+    if (err) return res.status(500).json({ message: 'Erro ao verificar associação.', error: err });
+    if (result.length > 0) return res.status(409).json({ message: 'Associação já existente.' });
+
+    const insertQuery = 'INSERT INTO user_study (userId, studyId) VALUES (?, ?)';
+    db.query(insertQuery, [userId, studyId], (err) => {
+      if (err) return res.status(500).json({ message: 'Erro ao associar utilizador ao estudo.', error: err });
+      res.status(201).json({ message: 'Utilizador associado com sucesso.' });
+    });
+  });
+});
+
+// Obter estudos de um utilizador
+router.get('/:userId/studies', (req, res) => {
+  const { userId } = req.params;
+
+  const query = `
+    SELECT s.* FROM user_study us
+    JOIN study s ON s.id = us.studyId
+    WHERE us.userId = ?
+  `;
+  db.query(query, [userId], (err, results) => {
+    if (err) return res.status(500).json({ message: 'Erro ao obter estudos.', error: err });
+    res.status(200).json(results);
+  });
+});
+
+//  Eliminar associação entre utilizador e estudo
+router.delete('/:userId/studies/:studyId', (req, res) => {
+  const { userId, studyId } = req.params;
+
+  const deleteQuery = 'DELETE FROM user_study WHERE userId = ? AND studyId = ?';
+  db.query(deleteQuery, [userId, studyId], (err, result) => {
+    if (err) return res.status(500).json({ message: 'Erro ao remover associação.', error: err });
+    if (result.affectedRows === 0) return res.status(404).json({ message: 'Associação não encontrada.' });
+
+    res.status(200).json({ message: 'Estudo do utilizador removido com sucesso.' });
+  });
+});
+
 
 module.exports = router;

@@ -4,7 +4,7 @@ const db = require('../config/db');
 const axios = require('axios');
 
 
-// 🔹 LISTAR POSTS DOS ESTUDOS DO UTILIZADOR
+// LISTAR POSTS DOS ESTUDOS DO UTILIZADOR
 router.get('/', (req, res) => {
     const userId = req.user?.id;
 
@@ -92,19 +92,19 @@ router.get('/', (req, res) => {
 });
 
 
-// 🔹 DETALHE DE UM POST
+// DETALHES DE UM POST
 router.get('/:id', (req, res) => {
     const { id } = req.params;
     db.query('SELECT * FROM post WHERE id = ?', [id], (err, results) => {
         if (err) {
             console.error('❌ Erro ao buscar post por ID:', err);
-            return res.status(500).json({ message: 'Erro ao buscar post.', error: err });
+            return res.status(500).json({ message: 'Erro ao procurar post.', error: err });
         }
         res.json(results[0]);
     });
 });
 
-// 🔹 IMPORTAR JSON DE POSTS VIA FRONTEND
+// IMPORTAR JSON DE POSTS
 router.post('/import', async (req, res) => {
     const { posts, studyId } = req.body;
 
