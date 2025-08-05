@@ -4,74 +4,87 @@ const db = require('../config/db');
 
 // CLASSIFICAR POST
 router.post('/', (req, res) => {
-    const { postId, studyId, categoryIds, sentimentoCategoryIds } = req.body;
-    const userId = req.user.username;
+    const { postId, questionId, categoryIds, sentimentoCategoryIds } = req.body;
+    const userId = req.user.id;
 
-    if (!postId || !studyId || !Array.isArray(categoryIds) || categoryIds.length === 0) {
-        return res.status(400).json({ message: 'Dados inválidos para classificação temática.' });
+    if (!postId || (!Array.isArray(categoryIds) && !Array.isArray(sentimentoCategoryIds))) {
+        return res.status(400).json({ message: 'Dados inválidos para classificação.' });
     }
 
-    const thematicValues = categoryIds.map(categoryId => [postId, studyId, categoryId, userId]);
-    const sentimentValue = (Array.isArray(sentimentoCategoryIds) && sentimentoCategoryIds.length > 0)
-        ? [[postId, studyId, sentimentoCategoryIds[0], userId]] : [];
+    // Agrupar todas as classificações (temáticas e sentimento)
+    const thematicValues = (categoryIds || []).map(categoryId => [userId, postId, questionId, categoryId]);
+    const sentimentValues = (sentimentoCategoryIds || []).map(categoryId => [userId, postId, questionId, categoryId]);
+    const allValues = [...thematicValues, ...sentimentValues];
+
+    if (allValues.length === 0) {
+        return res.status(400).json({ message: 'Nenhuma categoria selecionada.' });
+    }
 
     const insertQuery = `
-        INSERT INTO postsclassification (postId, studyId, post_classification, userId)
-        VALUES ? ON DUPLICATE KEY UPDATE post_classification = VALUES(post_classification)
+        INSERT IGNORE INTO classification (userId, postId, questionId, categoryId)
+        VALUES ?
     `;
 
-    db.beginTransaction(err => {
-        if (err) return res.status(500).json({ message: 'Erro interno.', error: err });
+    db.query(insertQuery, [allValues], (err, result) => {
+        if (err) {
+            console.error('Erro ao inserir classificações:', err);
+            return res.status(500).json({ message: 'Erro ao classificar o post.', error: err });
+        }
 
-        db.query(insertQuery, [thematicValues], (err) => {
-            if (err) return db.rollback(() => res.status(500).json({ message: 'Erro nas temáticas.', error: err }));
+        if (result.affectedRows === 0) {
+            // Nenhuma linha foi inserida, já estava tudo classificado
+            return res.status(200).json({ message: 'Post já classificado anteriormente. A avançar para o próximo.' });
+        }
 
-            if (sentimentValue.length > 0) {
-                db.query(insertQuery, [sentimentValue], (err) => {
-                    if (err) return db.rollback(() => res.status(500).json({ message: 'Erro no sentimento.', error: err }));
-                    db.commit(err => {
-                        if (err) return db.rollback(() => res.status(500).json({ message: 'Erro no commit.', error: err }));
-                        res.status(201).json({ message: 'Classificação completa realizada.' });
-                    });
-                });
-            } else {
-                db.commit(err => {
-                    if (err) return db.rollback(() => res.status(500).json({ message: 'Erro no commit.', error: err }));
-                    res.status(201).json({ message: 'Classificação temática realizada.' });
-                });
-            }
-        });
+        res.status(201).json({ message: 'Classificação registrada com sucesso.' });
     });
 });
 
-// CLASSIFICAÇÕES DO USER com sessao iniciada
+
+// CLASSIFICAÇÕES DO USER com sessão iniciada
 router.get('/user', (req, res) => {
-    const username = req.user.username;
+    const userId = req.user.id;
+    console.log('🔐 Utilizador autenticado:', userId);
 
     const query = `
-        SELECT pc.postId, pc.post_classification, c.categoryType
-        FROM postsclassification pc
-        JOIN categories c ON pc.post_classification = c.id
-        WHERE pc.userId = ?
+        SELECT cl.postId, cl.questionId, cl.categoryId, c.categoryType
+        FROM classification cl
+        JOIN categories c ON cl.categoryId = c.id
+        WHERE cl.userId = ?
     `;
 
-    db.query(query, [username], (err, results) => {
-        if (err) return res.status(500).json({ message: 'Erro ao buscar classificações.', error: err });
+    db.query(query, [userId], (err, results) => {
+        if (err) {
+            console.error('❌ Erro ao buscar classificações do user:', err);
+            return res.status(500).json({ message: 'Erro ao buscar classificações.', error: err });
+        }
+
+        console.log('📥 Resultados da base de dados:', results);
 
         const classifiedPosts = {};
-        results.forEach(({ postId, post_classification, categoryType }) => {
+        results.forEach(({ postId, questionId, categoryId, categoryType }) => {
             if (!classifiedPosts[postId]) {
-                classifiedPosts[postId] = { thematic: [], sentiment: [] };
+                classifiedPosts[postId] = {};
             }
-            if (categoryType === 'tematicas') {
-                classifiedPosts[postId].thematic.push(post_classification);
-            } else if (categoryType === 'sentimento') {
-                classifiedPosts[postId].sentiment = [post_classification];
+            if (!classifiedPosts[postId][questionId]) {
+                classifiedPosts[postId][questionId] = [];
+            }
+
+            if (categoryType === 'sentimento') {
+                classifiedPosts[postId][questionId] = [categoryId];
+            } else {
+                classifiedPosts[postId][questionId].push(categoryId);
             }
         });
+
+        console.log('✅ Estrutura final enviada para o frontend:', classifiedPosts);
 
         res.json(classifiedPosts);
     });
 });
+
+
+
+
 
 module.exports = router;
