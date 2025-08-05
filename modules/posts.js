@@ -121,7 +121,91 @@ router.get('/', async (req, res) => {
 });
 
 
+router.get('/investigador', (req, res) => {
+    const userId = req.user?.id;
 
+    console.log('➡️ Requisição para /posts recebida');
+    console.log('🔐 Utilizador autenticado:', req.user);
+
+    if (!userId) {
+        console.error('❌ req.user.id está undefined');
+        return res.status(401).json({ message: 'Token inválido ou utilizador não autenticado.' });
+    }
+
+    const query = `
+        SELECT DISTINCT p.id, p.pageName, IFNULL(p.details, '') AS details,
+            p.likesCount, p.commentsCount, p.sharesCount, p.studyId,
+            s.name AS studyName
+        FROM post p
+        INNER JOIN study s ON p.studyId = s.id
+        WHERE s.addedBy = ?
+    `;
+
+
+    const imagesQuery = `
+        SELECT i.postId, i.image_data, i.isFrontPage
+        FROM image i
+        WHERE i.postId IN (?);
+    `;
+
+    console.log('📥 Executando query de posts...');
+    db.query(query, [req.user.username], (err, postsResults) => {
+        if (err) {
+            console.error('❌ Erro ao buscar posts:', err);
+            return res.status(500).json({ message: 'Erro ao buscar posts.', error: err });
+        }
+
+        console.log('✅ Posts encontrados:', postsResults.length);
+
+        const postIds = postsResults.map(post => post.id);
+        if (postIds.length === 0) {
+            console.log('⚠️ Nenhum post encontrado para os estudos do utilizador.');
+            return res.json({ posts: [] });
+        }
+
+        console.log('🔎 IDs dos posts encontrados:', postIds);
+
+        db.query(imagesQuery, [postIds], (err, imagesResults) => {
+            if (err) {
+                console.error('❌ Erro ao buscar imagens:', err);
+                return res.status(500).json({ message: 'Erro ao buscar imagens.', error: err });
+            }
+
+            console.log('🖼️ Imagens retornadas do banco:', imagesResults.length);
+
+            const imagesByPostId = {};
+            imagesResults.forEach(img => {
+                if (!img.image_data) {
+                    console.warn(`⚠️ Imagem nula ignorada para o postId: ${img.postId}`);
+                    return;
+                }
+
+                if (!imagesByPostId[img.postId]) {
+                    imagesByPostId[img.postId] = [];
+                }
+
+                imagesByPostId[img.postId].push({
+                    image_data: img.image_data.toString('base64'),
+                    isFrontPage: img.isFrontPage
+                });
+            });
+
+            const posts = postsResults.map(post => ({
+                id: post.id,
+                pageName: post.pageName,
+                details: post.details,
+                likesCount: post.likesCount,
+                commentsCount: post.commentsCount,
+                sharesCount: post.sharesCount,
+                studyId: post.studyId,
+                images: imagesByPostId[post.id] || []
+            }));
+
+            console.log('📤 Enviando posts ao frontend...');
+            res.json({ posts });
+        });
+    });
+});
 
 
 // DETALHES DE UM POST
