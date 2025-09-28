@@ -2,6 +2,68 @@ const express = require('express');
 const router = express.Router();
 const db = require('../config/db');
 
+/**
+ * @openapi
+ * /classifications:
+ *   post:
+ *     tags: [Classifications]
+ *     summary: Classificar post
+ *     description: Regista classificações temáticas (múltiplas) e/ou de sentimento (geralmente única) para um **post** e **pergunta**. Entradas duplicadas são ignoradas (INSERT IGNORE).
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [postId, questionId]
+ *             properties:
+ *               postId:
+ *                 type: integer
+ *                 example: 101
+ *               questionId:
+ *                 type: integer
+ *                 example: 7
+ *               categoryIds:
+ *                 type: array
+ *                 description: IDs de categorias **temáticas** (pode ser múltiplo).
+ *                 items:
+ *                   type: integer
+ *                 example: [2, 5, 9]
+ *               sentimentoCategoryIds:
+ *                 type: array
+ *                 description: IDs de categorias de **sentimento** (normalmente apenas 1).
+ *                 items:
+ *                   type: integer
+ *                 example: [3]
+ *     responses:
+ *       201:
+ *         description: Classificação registrada com sucesso.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                   example: Classificação registrada com sucesso.
+ *       200:
+ *         description: Nada novo foi inserido (já estava classificado).
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                   example: Post já classificado anteriormente. A avançar para o próximo.
+ *       400:
+ *         description: Dados inválidos para classificação.
+ *       500:
+ *         description: Erro ao classificar o post.
+ */
+
 // CLASSIFICAR POST
 router.post('/', (req, res) => {
     const { postId, questionId, categoryIds, sentimentoCategoryIds } = req.body;
@@ -33,13 +95,48 @@ router.post('/', (req, res) => {
 
         if (result.affectedRows === 0) {
             // Nenhuma linha foi inserida, já estava tudo classificado
-            return res.status(200).json({ message: 'Post já classificado anteriormente. A avançar para o próximo.' });
+            return res.status(409).json({ message: 'Post já classificado anteriormente. A avançar para o próximo.' });
         }
 
         res.status(201).json({ message: 'Classificação registrada com sucesso.' });
     });
 });
 
+/**
+ * @openapi
+ * /classifications/user:
+ *   get:
+ *     tags: [Classifications]
+ *     summary: Obter classificações do utilizador autenticado
+ *     description: Retorna as classificações do utilizador ativo, agrupadas por **postId** → **questionId** → **categoryIds**. Para categorias de **sentimento**, é devolvido apenas um ID (substitui anteriores).
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Estrutura de classificações por post e pergunta.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               additionalProperties:
+ *                 type: object
+ *                 description: postId
+ *                 additionalProperties:
+ *                   type: array
+ *                   description: questionId → array de categoryId (1 no caso de sentimento).
+ *                   items:
+ *                     type: integer
+ *             examples:
+ *               exemplo:
+ *                 value:
+ *                   "45":
+ *                     "7": [2, 5]
+ *                     "8": [3]        # sentimento
+ *                   "46":
+ *                     "7": [9]
+ *       500:
+ *         description: Erro ao buscar classificações.
+ */
 
 // CLASSIFICAÇÕES DO USER com sessão iniciada
 router.get('/user', (req, res) => {
@@ -79,7 +176,7 @@ router.get('/user', (req, res) => {
 
         console.log('✅ Estrutura final enviada para o frontend:', classifiedPosts);
 
-        res.json(classifiedPosts);
+        res.status(201).json(classifiedPosts);
     });
 });
 

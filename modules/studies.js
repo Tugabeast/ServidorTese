@@ -2,6 +2,28 @@ const express = require('express');
 const router = express.Router();
 const db = require('../config/db');
 
+/**
+ * @openapi
+ * /studies:
+ *   get:
+ *     tags: [Studies]
+ *     summary: Listar estudos de um utilizador (investigador)
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: username
+ *         required: true
+ *         schema: { type: string }
+ *         description: Investigador (addedBy) dono dos estudos.
+ *     responses:
+ *       200:
+ *         description: Lista de estudos.
+ *       400:
+ *         description: Username não fornecido.
+ *       500:
+ *         description: Erro ao procurar estudos.
+ */
 // LISTAR ESTUDOS DE UM UTILIZADOR
 router.get('/', (req, res) => {
     const { username } = req.query;
@@ -24,6 +46,37 @@ router.get('/', (req, res) => {
     });
 });
 
+/**
+ * @openapi
+ * /studies:
+ *   post:
+ *     tags: [Studies]
+ *     summary: Criar estudo
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [name, addedBy]
+ *             properties:
+ *               name: { type: string, example: "Eleições 2026" }
+ *               obs: { type: string, example: "Posts do X/Twitter" }
+ *               addedBy: { type: string, example: "goncalo" }
+ *               minClassificationsPerPost: { type: integer, example: 3 }
+ *               validationAgreementPercent: { type: integer, example: 60 }
+ *     responses:
+ *       201:
+ *         description: Estudo criado com sucesso.
+ *       400:
+ *         description: Campos obrigatórios em falta.
+ *       409:
+ *         description: Estudo já existe.
+ *       500:
+ *         description: Erro ao criar estudo.
+ */
 
 // 🔹 CRIAR ESTUDO
 router.post('/', (req, res) => {
@@ -51,6 +104,42 @@ router.post('/', (req, res) => {
         });
     });
 });
+
+
+/**
+ * @openapi
+ * /studies/{studyId}:
+ *   put:
+ *     tags: [Studies]
+ *     summary: Atualizar estudo
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: studyId
+ *         required: true
+ *         schema: { type: integer }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               name: { type: string }
+ *               obs: { type: string }
+ *               updatedBy: { type: string }
+ *               finishedAt: { type: string, format: date-time }
+ *               minClassificationsPerPost: { type: integer }
+ *               validationAgreementPercent: { type: integer }
+ *     responses:
+ *       200:
+ *         description: Estudo atualizado com sucesso.
+ *       409:
+ *         description: Já existe outro estudo com esse nome.
+ *       500:
+ *         description: Erro ao atualizar estudo.
+ */
 
 // 🔹 ATUALIZAR ESTUDO
 router.put('/:studyId', (req, res) => {
@@ -88,6 +177,25 @@ router.put('/:studyId', (req, res) => {
     });
 });
 
+/**
+ * @openapi
+ * /studies/{studyId}:
+ *   delete:
+ *     tags: [Studies]
+ *     summary: Apagar estudo
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: studyId
+ *         required: true
+ *         schema: { type: integer }
+ *     responses:
+ *       200:
+ *         description: Estudo apagado com sucesso.
+ *       500:
+ *         description: Erro ao apagar estudo.
+ */
 
 // 🔹 APAGAR ESTUDO
 router.delete('/:studyId', (req, res) => {

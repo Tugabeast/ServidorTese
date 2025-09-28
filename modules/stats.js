@@ -2,6 +2,29 @@ const express = require('express');
 const router = express.Router();
 const db = require('../config/db');
 
+/**
+ * @openapi
+ * /stats/user:
+ *   get:
+ *     tags: [Stats]
+ *     summary: Estatísticas do utilizador autenticado
+ *     description: Devolve totais ponderados de classificações **validadas** vs **não validadas** para o utilizador autenticado (regra ≥3 votos iguais).
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Totais do utilizador.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 validated: { type: number, example: 12.5 }
+ *                 not_validated: { type: number, example: 7.5 }
+ *       500:
+ *         description: Erro ao procurar estatísticas.
+ */
+
 //  ESTATÍSTICAS DO USER com sessao iniciada
 router.get('/user', (req, res) => {
   const username = req.user.username;
@@ -46,6 +69,31 @@ router.get('/user', (req, res) => {
   });
 });
 
+/**
+ * @openapi
+ * /stats/general:
+ *   get:
+ *     tags: [Stats]
+ *     summary: Estatísticas gerais (anonimizadas)
+ *     description: Estatísticas agregadas por utilizador com anonimização (mostra `username` apenas para o próprio e para investigadores).
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Lista de utilizadores com validações.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 type: object
+ *                 properties:
+ *                   anonymizedUser: { type: string, example: "Utilizador 2" }
+ *                   validated: { type: number, example: 10.75 }
+ *                   not_validated: { type: number, example: 3.25 }
+ *       500:
+ *         description: Erro ao procurar estatísticas.
+ */
 
 // ESTATÍSTICAS DE TODOS os utilizadores com classificações feitas(ANONIMIZADAS)
 router.get('/general', (req, res) => {

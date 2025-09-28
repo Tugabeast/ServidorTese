@@ -1,7 +1,11 @@
 const express = require('express');
 const cors = require('cors');
 
+
 const authMiddleware = require('./middlewares/authMiddleware');
+
+const swaggerUi = require('swagger-ui-express');
+const swaggerSpec = require('./docs/swagger');
 
 const authRoutes = require('./modules/auth');
 const usersRoutes = require('./modules/users');
@@ -17,12 +21,15 @@ const app = express();
 
 app.use(cors());
 
+
+
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
+// Swagger UI 
+app.use('/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, { explorer: true }));
 //  Rotas públicas
 app.use('/auth', authRoutes);
-
 //  Rotas privadas & protegidas
 app.use('/users', authMiddleware, usersRoutes);
 app.use('/profile', authMiddleware, profileRoutes);
@@ -32,5 +39,9 @@ app.use('/posts', authMiddleware, postsRoutes);
 app.use('/classifications', authMiddleware, classificationsRoutes);
 app.use('/stats', authMiddleware, statsRoutes);
 app.use('/questions', authMiddleware, questionRoutes);
+
+
+
+app.get('/openapi.json', (req, res) => res.json(swaggerSpec));
 
 module.exports = app;

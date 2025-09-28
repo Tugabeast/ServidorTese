@@ -3,8 +3,42 @@ const router = express.Router();
 const bcrypt = require('bcrypt');
 const db = require('../config/db');
 
+/**
+ * @openapi
+ * /profile:
+ *   put:
+ *     tags: [Profile]
+ *     summary: Atualizar perfil (username e/ou password)
+ *     description: Verifica duplicação de username e confirma a password atual quando `newPassword` é enviada.
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [currentUsername]
+ *             properties:
+ *               currentUsername: { type: string, example: "goncalo" }
+ *               newUsername: { type: string, example: "goncalo.alves" }
+ *               currentPassword: { type: string, format: password, example: "123456" }
+ *               newPassword: { type: string, format: password, example: "novaPass#2025" }
+ *     responses:
+ *       200:
+ *         description: Perfil atualizado com sucesso.
+ *       400:
+ *         description: Campos obrigatórios em falta ou password atual incorreta.
+ *       404:
+ *         description: Utilizador não encontrado.
+ *       409:
+ *         description: Username já existe.
+ *       500:
+ *         description: Erro ao atualizar perfil.
+ */
+
 // ATUALIZAR PERFIL (USERNAME e/ou PASSWORD)
-router.put('/update-profile', async (req, res) => {
+router.put('/', async (req, res) => {
     const { currentUsername, newUsername, currentPassword, newPassword } = req.body;
 
     if (!currentUsername || (!newUsername && !newPassword)) {

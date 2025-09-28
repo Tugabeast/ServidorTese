@@ -3,6 +3,65 @@ const router = express.Router();
 const db = require('../config/db');
 const axios = require('axios');
 
+/**
+ * @openapi
+ * /posts:
+ *   get:
+ *     tags: [Posts]
+ *     summary: Listar posts dos estudos do utilizador autenticado
+ *     description: Retorna posts (com imagens e perguntas+categorias) de todos os estudos associados ao utilizador pelo `user_study`.
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Lista de posts com dados agregados.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 posts:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       id: { type: integer }
+ *                       pageName: { type: string }
+ *                       details: { type: string }
+ *                       likesCount: { type: integer }
+ *                       commentsCount: { type: integer }
+ *                       sharesCount: { type: integer }
+ *                       studyId: { type: integer }
+ *                       studyName: { type: string }
+ *                       images:
+ *                         type: array
+ *                         items:
+ *                           type: object
+ *                           properties:
+ *                             image_data: { type: string, description: "base64" }
+ *                             isFrontPage: { type: integer }
+ *                       questions:
+ *                         type: array
+ *                         items:
+ *                           type: object
+ *                           properties:
+ *                             id: { type: integer }
+ *                             question: { type: string }
+ *                             content: { type: string }
+ *                             inputType: { type: string }
+ *                             categories:
+ *                               type: array
+ *                               items:
+ *                                 type: object
+ *                                 properties:
+ *                                   id: { type: integer }
+ *                                   name: { type: string }
+ *                                   categoryType: { type: string }
+ *       401:
+ *         description: Token inválido ou não autenticado.
+ *       500:
+ *         description: Erro ao buscar posts.
+ */
 
 // LISTAR POSTS DOS ESTUDOS DO UTILIZADOR
 router.get('/', async (req, res) => {
@@ -89,37 +148,54 @@ router.get('/', async (req, res) => {
     });
 
     const postsWithData = posts.map(post => {
-    const postQuestions = questions
-        .filter(q => q.studyId === post.studyId)
-        .map(q => ({
-        ...q,
-        categories: categoriesByQuestion[q.id] || []
-        }));
+      const postQuestions = questions
+          .filter(q => q.studyId === post.studyId)
+          .map(q => ({
+          ...q,
+          categories: categoriesByQuestion[q.id] || []
+          }));
 
-    return {
-        id: post.id,
-        pageName: post.pageName,
-        details: post.details,
-        likesCount: post.likesCount,
-        commentsCount: post.commentsCount,
-        sharesCount: post.sharesCount,
-        studyId: post.studyId,
-        studyName: post.studyName,
-        images: imagesByPost[post.id] || [],
-        questions: postQuestions,
-    };
+      return {
+          id: post.id,
+          pageName: post.pageName,
+          details: post.details,
+          likesCount: post.likesCount,
+          commentsCount: post.commentsCount,
+          sharesCount: post.sharesCount,
+          studyId: post.studyId,
+          studyName: post.studyName,
+          images: imagesByPost[post.id] || [],
+          questions: postQuestions,
+      };
     });
 
 
     //console.log('📦 Dados finais enviados para o frontend:', postsWithData);
 
-    res.json({ posts: postsWithData });
+    res.status(200).json({ posts: postsWithData });
   } catch (err) {
     console.error('❌ Erro na rota /posts:', err);
-    res.status(500).json({ message: 'Erro ao buscar posts com dados.', error: err });
+    res.status(500).json({ message: 'Erro ao receber posts com dados.', error: err });
   }
 });
 
+/**
+ * @openapi
+ * /posts/investigador:
+ *   get:
+ *     tags: [Posts]
+ *     summary: Listar posts criados pelo investigador autenticado
+ *     description: Retorna posts dos estudos cujo `addedBy` é o `username` do utilizador autenticado. Inclui imagens (base64).
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Lista de posts do investigador.
+ *       401:
+ *         description: Não autenticado.
+ *       500:
+ *         description: Erro ao buscar posts.
+ */
 
 router.get('/investigador', (req, res) => {
     const userId = req.user?.id;
@@ -202,11 +278,30 @@ router.get('/investigador', (req, res) => {
             }));
 
             console.log('📤 Enviando posts ao frontend...');
-            res.json({ posts });
+            res.status(200).json({ posts });
         });
     });
 });
 
+/**
+ * @openapi
+ * /posts/{id}:
+ *   get:
+ *     tags: [Posts]
+ *     summary: Detalhes de um post
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: integer }
+ *     responses:
+ *       200:
+ *         description: Post encontrado.
+ *       500:
+ *         description: Erro ao procurar post.
+ */
 
 // DETALHES DE UM POST
 router.get('/:id', (req, res) => {
@@ -220,8 +315,56 @@ router.get('/:id', (req, res) => {
     });
 });
 
+/**
+ * @openapi
+ * /posts:
+ *   post:
+ *     tags: [Posts]
+ *     summary: Importar posts a partir de JSON (Twitter)
+ *     description: Recebe um array de posts com campos do Twitter/X e guarda em `post` e `image`. Imagens são buscadas por URL e guardadas em binário.
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [posts, studyId]
+ *             properties:
+ *               studyId:
+ *                 type: integer
+ *                 example: 12
+ *               posts:
+ *                 type: array
+ *                 items:
+ *                   type: object
+ *                   properties:
+ *                     user:
+ *                       type: object
+ *                       properties:
+ *                         url: { type: string, example: "https://twitter.com/somepage" }
+ *                     url: { type: string, example: "https://twitter.com/.../status/..." }
+ *                     username: { type: string, example: "SomePage" }
+ *                     id: { type: string, example: "1888888888888888888" }
+ *                     text: { type: string }
+ *                     likes: { type: integer }
+ *                     replies: { type: integer }
+ *                     retweets: { type: integer }
+ *                     images:
+ *                       type: array
+ *                       items: { type: string, example: "https://pbs.twimg.com/media/....jpg" }
+ *     responses:
+ *       201:
+ *         description: Importação concluída com sucesso.
+ *       400:
+ *         description: Formato inválido.
+ *       500:
+ *         description: Erro ao importar.
+ */
+
 // IMPORTAR JSON DE POSTS
-router.post('/import', async (req, res) => {
+router.post('/', async (req, res) => {
     const { posts, studyId } = req.body;
 
     if (!Array.isArray(posts) || !studyId) {
@@ -266,6 +409,7 @@ router.post('/import', async (req, res) => {
             }
         } catch (err) {
             console.error('❌ Erro ao importar post:', err);
+            return res.status(500).json({ message: 'Erro ao importar post.', error: err });
         }
     }
 

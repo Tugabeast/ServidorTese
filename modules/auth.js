@@ -5,6 +5,51 @@ const jwt = require('jsonwebtoken');
 const db = require('../config/db');
 require('dotenv').config();
 
+/**
+ * @openapi
+ * /auth/register:
+ *   post:
+ *     tags: [Auth]
+ *     summary: Registar novo utilizador
+ *     description: Cria um utilizador do tipo **user**. Verifica duplicação por `username` ou `email`.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [username, email, password]
+ *             properties:
+ *               username:
+ *                 type: string
+ *                 example: goncalo
+ *               email:
+ *                 type: string
+ *                 format: email
+ *                 example: goncalo@example.com
+ *               password:
+ *                 type: string
+ *                 format: password
+ *                 example: 123456
+ *     responses:
+ *       201:
+ *         description: Utilizador criado com sucesso.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                   example: Utilizador criado com sucesso.
+ *       400:
+ *         description: Campos obrigatórios em falta.
+ *       409:
+ *         description: Utilizador ou email já registado.
+ *       500:
+ *         description: Erro no servidor.
+ */
+
 // rota para o registo da conta
 router.post('/register', async (req, res) => {
     const { username, email, password } = req.body;
@@ -32,11 +77,67 @@ router.post('/register', async (req, res) => {
                 return res.status(201).json({ message: 'Utilizador criado com sucesso.' });
             });
         } catch (error) {
-            return res.status(500).json({ message: 'Erro ao processar password', error });
+            return res.status(500).json({ message: 'Erro no servidor', error });
         }
     });
 });
 
+
+/**
+ * @openapi
+ * /auth/login:
+ *   post:
+ *     tags: [Auth]
+ *     summary: Início de sessão
+ *     description: Autentica por `email` e `password` e devolve um **JWT**.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [email, password]
+ *             properties:
+ *               email:
+ *                 type: string
+ *                 format: email
+ *                 example: goncalo@example.com
+ *               password:
+ *                 type: string
+ *                 format: password
+ *                 example: 123456
+ *     responses:
+ *       201:
+ *         description: Login realizado com sucesso. (Devolve token e info básica do utilizador)
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                   example: Login realizado com sucesso.
+ *                 token:
+ *                   type: string
+ *                   example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+ *                 type:
+ *                   type: string
+ *                   example: user
+ *                 username:
+ *                   type: string
+ *                   example: goncalo
+ *                 userId:
+ *                   type: integer
+ *                   example: 12
+ *       400:
+ *         description: Email e password são obrigatórios.
+ *       401:
+ *         description: Password incorreta.
+ *       404:
+ *         description: Utilizador não encontrado.
+ *       500:
+ *         description: Erro no servidor.
+ */
 
 // rota para o login 
 router.post('/login', (req, res) => {
