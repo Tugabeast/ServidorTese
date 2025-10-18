@@ -24,7 +24,7 @@ const db = require('../config/db');
  *       500:
  *         description: Erro ao procurar estudos.
  */
-// LISTAR ESTUDOS DE UM UTILIZADOR
+// LISTAR ESTUDOS DE UM Ivnestigador
 router.get('/', (req, res) => {
     const { username } = req.query;
 
@@ -41,8 +41,8 @@ router.get('/', (req, res) => {
         ORDER BY createdAt DESC
     `;
     db.query(query, [username], (err, results) => {
-        if (err) return res.status(500).json({ message: 'Erro ao procurar estudos.', error: err });
-        res.json(results);
+        if (err) return res.status(500).json({ message: 'Erro ao obter estudos.', error: err });
+        res.status(200).json(results);
     });
 });
 
@@ -172,7 +172,7 @@ router.put('/:studyId', (req, res) => {
 
         db.query(query, params, (err) => {
             if (err) return res.status(500).json({ message: 'Erro ao atualizar estudo.', error: err });
-            res.json({ message: 'Estudo atualizado com sucesso.' });
+            res.status(200).json({ message: 'Estudo atualizado com sucesso.' });
         });
     });
 });
@@ -193,16 +193,26 @@ router.put('/:studyId', (req, res) => {
  *     responses:
  *       200:
  *         description: Estudo apagado com sucesso.
+ *       404:
+ *         description: Estudo não encontrado.
  *       500:
  *         description: Erro ao apagar estudo.
  */
 
 // 🔹 APAGAR ESTUDO
 router.delete('/:studyId', (req, res) => {
-    db.query('DELETE FROM study WHERE id = ?', [req.params.studyId], (err) => {
-        if (err) return res.status(500).json({ message: 'Erro ao apagar estudo.', error: err });
-        res.json({ message: 'Estudo apagado com sucesso.' });
+    db.query('DELETE FROM study WHERE id = ?', [req.params.studyId], (err, result) => {
+        if (err) {
+            return res.status(500).json({ message: 'Erro ao apagar estudo.', error: err });
+        }
+
+        if (result.affectedRows === 0) {
+            return res.status(404).json({ message: 'Estudo não encontrado.' });
+        }
+
+        res.status(200).json({ message: 'Estudo apagado com sucesso.' });
     });
 });
+
 
 module.exports = router;

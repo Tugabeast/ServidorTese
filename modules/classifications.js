@@ -66,41 +66,60 @@ const db = require('../config/db');
 
 // CLASSIFICAR POST
 router.post('/', (req, res) => {
-    const { postId, questionId, categoryIds, sentimentoCategoryIds } = req.body;
-    const userId = req.user.id;
+  const { postId, questionId, categoryIds, sentimentoCategoryIds } = req.body;
+  const userId = req.user.id;
 
-    if (!postId || (!Array.isArray(categoryIds) && !Array.isArray(sentimentoCategoryIds))) {
-        return res.status(400).json({ message: 'Dados inválidos para classificação.' });
-    }
+  if (!postId || !questionId) {
+    return res.status(400).json({ message: 'postId e questionId são obrigatórios.' });
+  }
 
-    // Agrupar todas as classificações (temáticas e sentimento)
-    const thematicValues = (categoryIds || []).map(categoryId => [userId, postId, questionId, categoryId]);
-    const sentimentValues = (sentimentoCategoryIds || []).map(categoryId => [userId, postId, questionId, categoryId]);
-    const allValues = [...thematicValues, ...sentimentValues];
+  const thematic = Array.isArray(categoryIds) ? categoryIds : [];
+  const sentiment = Array.isArray(sentimentoCategoryIds) ? sentimentoCategoryIds : [];
+  const all = [...thematic, ...sentiment];
 
-    if (allValues.length === 0) {
-        return res.status(400).json({ message: 'Nenhuma categoria selecionada.' });
-    }
+  if (all.length === 0) {
+    return res.status(400).json({ message: 'Nenhuma categoria selecionada.' });
+  }
 
-    const insertQuery = `
-        INSERT IGNORE INTO classification (userId, postId, questionId, categoryId)
-        VALUES ?
-    `;
+  db.beginTransaction((err) => {
+    if (err) return res.status(500).json({ message: 'Erro ao iniciar transação.', error: err });
 
-    db.query(insertQuery, [allValues], (err, result) => {
-        if (err) {
-            console.error('Erro ao inserir classificações:', err);
-            return res.status(500).json({ message: 'Erro ao classificar o post.', error: err });
+    const delSql = `DELETE FROM classification WHERE userId = ? AND postId = ? AND questionId = ?`;
+    db.query(delSql, [userId, postId, questionId], (delErr, delResult) => {
+      if (delErr) {
+        return db.rollback(() =>
+          res.status(500).json({ message: 'Erro ao remover classificações anteriores.', error: delErr })
+        );
+      }
+
+      const values = all.map(catId => [userId, postId, questionId, catId]);
+      const insSql = `INSERT INTO classification (userId, postId, questionId, categoryId) VALUES ?`;
+
+      db.query(insSql, [values], (insErr) => {
+        if (insErr) {
+          return db.rollback(() =>
+            res.status(500).json({ message: 'Erro ao gravar novas classificações.', error: insErr })
+          );
         }
 
-        if (result.affectedRows === 0) {
-            // Nenhuma linha foi inserida, já estava tudo classificado
-            return res.status(409).json({ message: 'Post já classificado anteriormente. A avançar para o próximo.' });
-        }
+        db.commit((commitErr) => {
+          if (commitErr) {
+            return db.rollback(() =>
+              res.status(500).json({ message: 'Erro ao concluir transação.', error: commitErr })
+            );
+          }
 
-        res.status(201).json({ message: 'Classificação registrada com sucesso.' });
+          const status = delResult.affectedRows > 0 ? 200 : 201;
+          const msg = delResult.affectedRows > 0
+            ? 'Classificação atualizada com sucesso.'
+            : 'Classificação registada com sucesso.';
+          return res.status(status).json({ message: msg });
+        });
+      });
     });
+  });
 });
+
 
 /**
  * @openapi

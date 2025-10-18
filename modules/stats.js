@@ -28,46 +28,98 @@ const db = require('../config/db');
 //  ESTATÍSTICAS DO USER com sessao iniciada
 router.get('/user', (req, res) => {
   const username = req.user.username;
-  const query = `
-    WITH ThemeCounts AS (
-      SELECT postId, categoryId, COUNT(*) as total_votes
-      FROM classification
-      GROUP BY postId, categoryId
+  const sql = `
+    /* Contagem por categoria dentro de cada (post, pergunta) */
+    WITH CatCounts AS (
+      SELECT c.postId, c.questionId, c.categoryId, COUNT(*) AS cnt
+      FROM classification c
+      GROUP BY c.postId, c.questionId, c.categoryId
     ),
-    ValidThemes AS (
-      SELECT postId, categoryId
-      FROM ThemeCounts
-      WHERE total_votes >= 3
+    /* Total de votos por (post, pergunta) */
+    Totals AS (
+      SELECT postId, questionId, SUM(cnt) AS N
+      FROM CatCounts
+      GROUP BY postId, questionId
     ),
-    UserClassifications AS (
-      SELECT c.postId, c.categoryId
+    /* Ranking das categorias por (post, pergunta) */
+    Ranked AS (
+      SELECT cc.postId, cc.questionId, cc.categoryId, cc.cnt,
+             RANK() OVER (PARTITION BY cc.postId, cc.questionId ORDER BY cc.cnt DESC) AS rnk
+      FROM CatCounts cc
+    ),
+    /* Apenas (post, pergunta) com top único (sem empate) */
+    TopUnique AS (
+      SELECT r.postId, r.questionId, r.categoryId, r.cnt
+      FROM Ranked r
+      JOIN (
+        SELECT postId, questionId
+        FROM Ranked
+        WHERE rnk = 1
+        GROUP BY postId, questionId
+        HAVING COUNT(*) = 1
+      ) t ON t.postId = r.postId AND t.questionId = r.questionId
+      WHERE r.rnk = 1
+    ),
+    /* Métricas do estudo por post */
+    StudyParams AS (
+      SELECT p.id AS postId,
+             s.minClassificationsPerPost AS minCls,
+             s.validationAgreementPercent AS agreePct
+      FROM post p
+      JOIN study s ON s.id = p.studyId
+    ),
+    /* (post, pergunta) validados segundo o estudo */
+    ValidatedQ AS (
+      SELECT tu.postId, tu.questionId, tu.categoryId AS topCategoryId
+      FROM TopUnique tu
+      JOIN Totals tot ON tot.postId = tu.postId AND tot.questionId = tu.questionId
+      JOIN StudyParams sp ON sp.postId = tu.postId
+      WHERE tot.N >= sp.minCls
+        AND (tu.cnt * 100.0 / tot.N) >= sp.agreePct
+    ),
+    /* Classificações do utilizador */
+    UserClass AS (
+      SELECT c.postId, c.questionId, c.categoryId
       FROM classification c
       JOIN user u ON u.id = c.userId
       WHERE u.username = ?
     ),
-    AllUserPostIds AS (
-      SELECT DISTINCT postId FROM UserClassifications
+    /* Total de respostas do user por (post, pergunta) */
+    UserQTotals AS (
+      SELECT postId, questionId, COUNT(*) AS userTotal
+      FROM UserClass
+      GROUP BY postId, questionId
     ),
-    ValidUserClassifications AS (
-      SELECT uc.postId
-      FROM UserClassifications uc
-      JOIN ValidThemes vt ON uc.postId = vt.postId AND uc.categoryId = vt.categoryId
+    /* Nº de respostas do user que acertam no rótulo validado (uma ou zero por pergunta) */
+    UserQCorrect AS (
+      SELECT uc.postId, uc.questionId, COUNT(*) AS userCorrect
+      FROM UserClass uc
+      JOIN ValidatedQ vq
+        ON vq.postId = uc.postId
+       AND vq.questionId = uc.questionId
+       AND vq.topCategoryId = uc.categoryId
+      GROUP BY uc.postId, uc.questionId
     ),
-    WeightedValidations AS (
-      SELECT vuc.postId,
-             COUNT(*) * 1.0 / (SELECT COUNT(*) FROM UserClassifications uc2 WHERE uc2.postId = vuc.postId) AS weight
-      FROM ValidUserClassifications vuc
-      GROUP BY vuc.postId
+    /* Peso por pergunta = acertos / total do user naquela pergunta */
+    Weights AS (
+      SELECT t.postId, t.questionId,
+             COALESCE(c.userCorrect, 0) * 1.0 / t.userTotal AS weight
+      FROM UserQTotals t
+      LEFT JOIN UserQCorrect c
+        ON c.postId = t.postId AND c.questionId = t.questionId
     )
-    SELECT COALESCE(SUM(wv.weight), 0) AS validated,
-           (SELECT COUNT(*) FROM AllUserPostIds) - COALESCE(SUM(wv.weight), 0) AS not_validated
-    FROM WeightedValidations wv;
+    SELECT
+      COALESCE(SUM(weight), 0) AS validated,
+      (SELECT COUNT(*) FROM UserQTotals) - COALESCE(SUM(weight), 0) AS not_validated
+    FROM Weights;
   `;
-  db.query(query, [username], (err, results) => {
-    if (err) return res.status(500).json({ message: 'Erro ao procurar estatísticas.', error: err });
-    res.json(results[0] || { validated: 0, not_validated: 0 });
+  db.query(sql, [username], (err, rows) => {
+    if (err) return res.status(500).json({ message: 'Erro ao obter estatísticas.', error: err });
+    res.status(200).json(rows[0] || { validated: 0, not_validated: 0 });
   });
 });
+
+
 
 /**
  * @openapi
@@ -98,49 +150,81 @@ router.get('/user', (req, res) => {
 // ESTATÍSTICAS DE TODOS os utilizadores com classificações feitas(ANONIMIZADAS)
 router.get('/general', (req, res) => {
   const loggedUser = req.user.username;
-  const userType = req.user.type;
+  const userType   = req.user.type;
 
-  const query = `
-    WITH UserVotes AS (
-      SELECT c.userId, c.postId, c.categoryId
+  const sql = `
+    /* Contagem por categoria dentro de cada (post, pergunta) */
+    WITH CatCounts AS (
+      SELECT c.postId, c.questionId, c.categoryId, COUNT(*) AS cnt
       FROM classification c
+      GROUP BY c.postId, c.questionId, c.categoryId
     ),
-    AllVotes AS (
-      SELECT postId, categoryId, COUNT(*) as count
-      FROM classification
-      GROUP BY postId, categoryId
+    Totals AS (
+      SELECT postId, questionId, SUM(cnt) AS N
+      FROM CatCounts
+      GROUP BY postId, questionId
     ),
-    ValidVotes AS (
-      SELECT postId, categoryId
-      FROM AllVotes
-      WHERE count >= 3 AND (postId, count) IN (
-        SELECT postId, MAX(count)
-        FROM AllVotes
-        GROUP BY postId
-      )
+    Ranked AS (
+      SELECT cc.postId, cc.questionId, cc.categoryId, cc.cnt,
+             RANK() OVER (PARTITION BY cc.postId, cc.questionId ORDER BY cc.cnt DESC) AS rnk
+      FROM CatCounts cc
     ),
-    UserClassifications AS (
-      SELECT uv.userId, uv.postId, COUNT(*) as total
-      FROM UserVotes uv
-      GROUP BY uv.userId, uv.postId
+    TopUnique AS (
+      SELECT r.postId, r.questionId, r.categoryId, r.cnt
+      FROM Ranked r
+      JOIN (
+        SELECT postId, questionId
+        FROM Ranked
+        WHERE rnk = 1
+        GROUP BY postId, questionId
+        HAVING COUNT(*) = 1
+      ) t ON t.postId = r.postId AND t.questionId = r.questionId
+      WHERE r.rnk = 1
     ),
-    UserValidClassifications AS (
-      SELECT uv.userId, uv.postId, COUNT(*) as correct
-      FROM UserVotes uv
-      JOIN ValidVotes vv ON uv.postId = vv.postId AND uv.categoryId = vv.categoryId
-      GROUP BY uv.userId, uv.postId
+    StudyParams AS (
+      SELECT p.id AS postId,
+             s.minClassificationsPerPost AS minCls,
+             s.validationAgreementPercent AS agreePct
+      FROM post p
+      JOIN study s ON s.id = p.studyId
     ),
+    ValidatedQ AS (
+      SELECT tu.postId, tu.questionId, tu.categoryId AS topCategoryId
+      FROM TopUnique tu
+      JOIN Totals tot ON tot.postId = tu.postId AND tot.questionId = tu.questionId
+      JOIN StudyParams sp ON sp.postId = tu.postId
+      WHERE tot.N >= sp.minCls
+        AND (tu.cnt * 100.0 / tot.N) >= sp.agreePct
+    ),
+    /* Totais do user por (post, pergunta) */
+    UserQTotals AS (
+      SELECT c.userId, c.postId, c.questionId, COUNT(*) AS total
+      FROM classification c
+      GROUP BY c.userId, c.postId, c.questionId
+    ),
+    /* Acertos do user por (post, pergunta) */
+    UserQCorrect AS (
+      SELECT c.userId, c.postId, c.questionId, COUNT(*) AS correct
+      FROM classification c
+      JOIN ValidatedQ vq
+        ON vq.postId = c.postId
+       AND vq.questionId = c.questionId
+       AND vq.topCategoryId = c.categoryId
+      GROUP BY c.userId, c.postId, c.questionId
+    ),
+    /* Score ponderado por pergunta e agregado por utilizador */
     UserScores AS (
-      SELECT uc.userId,
-             SUM(COALESCE(uvc.correct, 0) / uc.total) as validated,
-             COUNT(*) - SUM(COALESCE(uvc.correct, 0) / uc.total) as not_validated
-      FROM UserClassifications uc
-      LEFT JOIN UserValidClassifications uvc
-        ON uc.userId = uvc.userId AND uc.postId = uvc.postId
-      GROUP BY uc.userId
+      SELECT t.userId,
+             SUM(COALESCE(c.correct,0) * 1.0 / t.total) AS validated,
+             COUNT(*) - SUM(COALESCE(c.correct,0) * 1.0 / t.total) AS not_validated
+      FROM UserQTotals t
+      LEFT JOIN UserQCorrect c
+        ON c.userId = t.userId AND c.postId = t.postId AND c.questionId = t.questionId
+      GROUP BY t.userId
     ),
+    /* Anonimização */
     Anonymized AS (
-      SELECT u.id as userId,
+      SELECT u.id AS userId,
              CASE
                WHEN ? = 'investigator' THEN u.username
                WHEN u.username = ? THEN u.username
@@ -150,17 +234,17 @@ router.get('/general', (req, res) => {
       WHERE u.id IN (SELECT DISTINCT userId FROM classification)
     )
     SELECT a.anonymizedUser,
-           ROUND(COALESCE(us.validated, 0), 2) AS validated,
+           ROUND(COALESCE(us.validated, 0), 2)     AS validated,
            ROUND(COALESCE(us.not_validated, 0), 2) AS not_validated
     FROM Anonymized a
     LEFT JOIN UserScores us ON a.userId = us.userId;
   `;
-
-  db.query(query, [userType, loggedUser], (err, results) => {
-    if (err) return res.status(500).json({ message: 'Erro ao procurar estatísticas.', error: err });
-    res.json(results);
+  db.query(sql, [userType, loggedUser], (err, rows) => {
+    if (err) return res.status(500).json({ message: 'Erro ao obter estatísticas.', error: err });
+    res.status(200).json(rows);
   });
 });
+
 
 
 module.exports = router;

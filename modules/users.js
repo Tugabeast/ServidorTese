@@ -32,43 +32,6 @@ router.get('/', (req, res) => {
 
 /**
  * @openapi
- * /users/{userId}:
- *   get:
- *     tags: [Users]
- *     summary: Obter utilizador por ID
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: userId
- *         required: true
- *         schema: { type: integer }
- *     responses:
- *       200:
- *         description: Utilizador encontrado.
- *       404:
- *         description: Utilizador não encontrado.
- *       500:
- *         description: Erro ao procurar utilizador.
- */
-
-// rota para obter user por id
-router.get('/:userId', (req, res) => {
-    const { userId } = req.params;
-    const query = `
-        SELECT id, username, email, type, createdAt, updatedAt, createdBy, updatedBy
-        FROM user
-        WHERE id = ?
-    `;
-    db.query(query, [userId], (err, results) => {
-        if (err) return res.status(500).json({ message: 'Erro ao procurar utilizador', error: err });
-        if (results.length === 0) return res.status(404).json({ message: 'Utilizador não encontrado' });
-        res.status(200).json(results[0]);
-    });
-});
-
-/**
- * @openapi
  * /users:
  *   post:
  *     tags: [Users]
@@ -131,6 +94,45 @@ router.post('/', async (req, res) => {
         );
     });
 });
+
+/**
+ * @openapi
+ * /users/{userId}:
+ *   get:
+ *     tags: [Users]
+ *     summary: Obter utilizador por ID
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: userId
+ *         required: true
+ *         schema: { type: integer }
+ *     responses:
+ *       200:
+ *         description: Utilizador encontrado.
+ *       404:
+ *         description: Utilizador não encontrado.
+ *       500:
+ *         description: Erro ao procurar utilizador.
+ */
+
+// rota para obter user por id
+router.get('/:userId', (req, res) => {
+    const { userId } = req.params;
+    const query = `
+        SELECT id, username, email, type, createdAt, updatedAt, createdBy, updatedBy
+        FROM user
+        WHERE id = ?
+    `;
+    db.query(query, [userId], (err, results) => {
+        if (err) return res.status(500).json({ message: 'Erro ao procurar utilizador', error: err });
+        if (results.length === 0) return res.status(404).json({ message: 'Utilizador não encontrado' });
+        res.status(200).json(results[0]);
+    });
+});
+
+
 
 /**
  * @openapi
