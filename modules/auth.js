@@ -4,7 +4,6 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const db = require('../config/db');
 require('dotenv').config();
-
 /**
  * @openapi
  * /auth/register:
@@ -59,7 +58,7 @@ router.post('/register', async (req, res) => {
     }
 
     const checkQuery = 'SELECT username FROM user WHERE username = ? OR email = ?';
-    db.query(checkQuery, [username, email], async (err, results) => {
+    db.query(checkQuery, [username, email], async (err, results) => {    
         if (err) return res.status(500).json({ message: 'Erro no servidor', error: err });
 
         if (results.length > 0) {
