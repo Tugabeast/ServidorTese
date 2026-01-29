@@ -64,6 +64,7 @@ const axios = require('axios');
  */
 
 // LISTAR POSTS DOS ESTUDOS DO UTILIZADOR
+/*
 router.get('/', async (req, res) => {
   const userId = req.user?.id;
 
@@ -178,6 +179,8 @@ router.get('/', async (req, res) => {
     res.status(500).json({ message: 'Erro ao receber posts com dados.', error: err });
   }
 });
+*/
+
 
 /**
  * @openapi
@@ -416,4 +419,134 @@ router.post('/', async (req, res) => {
     res.status(201).json({ message: 'Importação concluída com sucesso.' });
 });
 
+
+router.get('/', async (req, res) => {
+  const userId = req.user?.id;
+  const selectedStudyId = req.query.studyId; 
+
+  console.log('\n================================================');
+  console.log(`📡 ROTA GET /posts CHAMADA`);
+  console.log(`👤 User ID: ${userId}`);
+  console.log(`📥 Parâmetro 'studyId' recebido: "${selectedStudyId}"`);
+
+  if (!userId) {
+    return res.status(401).json({ message: 'Token inválido ou utilizador não autenticado.' });
+  }
+
+  try {
+    // A. Verificar quais estudos o utilizador TEM PERMISSÃO (Tabela user_study)
+    const [studyRows] = await db.promise().query(
+      'SELECT studyId FROM user_study WHERE userId = ?', [userId]
+    );
+    const allowedStudyIds = studyRows.map(row => row.studyId);
+
+    console.log(`✅ IDs permitidos na DB: [${allowedStudyIds.join(', ')}]`);
+
+    if (allowedStudyIds.length === 0) {
+      console.log('⚠️ User sem estudos.');
+      return res.json({ posts: [] });
+    }
+
+    // B. Definir o Filtro (AQUI ESTÁ A MUDANÇA CRUCIAL)
+    let targetStudyIds = [];
+
+    if (selectedStudyId && selectedStudyId !== 'undefined' && selectedStudyId !== '') {
+        const idToCheck = parseInt(selectedStudyId, 10);
+        
+        // Se o estudo pedido está na lista de permitidos, usamos APENAS esse.
+        if (allowedStudyIds.includes(idToCheck)) {
+            targetStudyIds = [idToCheck];
+            console.log(`🎯 SUCESSO: Filtro aceite. A buscar posts APENAS do StudyID = ${idToCheck}`);
+        } else {
+            console.warn(`⛔ BLOQUEIO: Tentativa de acesso não autorizado ao estudo ${idToCheck}`);
+            return res.status(403).json({ message: 'Sem permissão para este estudo.' });
+        }
+    } else {
+        // Se não pedir nada, carregamos o primeiro permitido para não misturar tudo
+        targetStudyIds = [allowedStudyIds[0]];
+        console.log(`📂 Sem seleção: A mostrar o default (ID: ${targetStudyIds[0]})`);
+    }
+
+    // C. Query SQL Principal
+    // O filtro WHERE p.studyId IN (?) vai receber apenas o ID selecionado (ex: [2])
+    const [posts] = await db.promise().query(
+      `SELECT p.*, s.name AS studyName FROM post p
+       INNER JOIN study s ON s.id = p.studyId
+       WHERE p.studyId IN (?)`, [targetStudyIds]
+    );
+
+    console.log(`📦 Posts encontrados: ${posts.length}`);
+
+    if (posts.length === 0) {
+      return res.json({ posts: [] });
+    }
+
+    const postIds = posts.map(p => p.id);
+
+    // D. Buscar Imagens
+    const [images] = await db.promise().query(
+      `SELECT postId, image_data, isFrontPage FROM image WHERE postId IN (?)`, [postIds]
+    );
+    const imagesByPost = {};
+    images.forEach(img => {
+      if (!imagesByPost[img.postId]) imagesByPost[img.postId] = [];
+      imagesByPost[img.postId].push({
+        image_data: img.image_data?.toString('base64') || null,
+        isFrontPage: img.isFrontPage
+      });
+    });
+
+    // E. Buscar Perguntas (Apenas do estudo selecionado)
+    const [questions] = await db.promise().query(
+      `SELECT * FROM question WHERE studyId IN (?)`, [targetStudyIds]
+    );
+    const questionIds = questions.map(q => q.id);
+
+    // F. Buscar Categorias
+    let categoriesByQuestion = {};
+    if (questionIds.length > 0) {
+      const [categories] = await db.promise().query(
+        `SELECT * FROM categories WHERE questionId IN (?)`, [questionIds]
+      );
+      categories.forEach(cat => {
+        if (!categoriesByQuestion[cat.questionId]) categoriesByQuestion[cat.questionId] = [];
+        categoriesByQuestion[cat.questionId].push(cat);
+      });
+    }
+
+    // G. Montar Resposta
+    const postsWithData = posts.map(post => {
+      const postQuestions = questions
+          .filter(q => q.studyId === post.studyId)
+          .map(q => ({
+             ...q,
+             categories: categoriesByQuestion[q.id] || []
+          }));
+
+      return {
+          id: post.id,
+          pageName: post.pageName,
+          details: post.details,
+          likesCount: post.likesCount,
+          commentsCount: post.commentsCount,
+          sharesCount: post.sharesCount,
+          studyId: post.studyId,
+          studyName: post.studyName,
+          images: imagesByPost[post.id] || [],
+          questions: postQuestions,
+      };
+    });
+
+    res.status(200).json({ posts: postsWithData });
+    console.log('✅ Resposta enviada ao frontend.');
+    console.log('================================================\n');
+
+  } catch (err) {
+    console.error('❌ Erro na rota /posts:', err);
+    res.status(500).json({ message: 'Erro ao receber posts.', error: err });
+  }
+});
+
 module.exports = router;
+
+

@@ -11,7 +11,7 @@ const options = {
         'Documentação da API (OpenAPI 3) – autenticação via Bearer JWT.',
     },
     servers: [
-      { url: 'http://http://193.137.84.23/api/', description: 'Local' },
+      { url: 'http://193.137.84.23/api/', description: 'Local' },
     ],
     components: {
       securitySchemes: {

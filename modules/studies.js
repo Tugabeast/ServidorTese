@@ -215,4 +215,31 @@ router.delete('/:studyId', (req, res) => {
 });
 
 
+router.get('/user', (req, res) => {
+    const userId = req.user.id; // Assume que o middleware de auth popula req.user
+
+    // JOIN entre study e user_study para saber quais os estudos deste user específico
+    const query = `
+        SELECT s.id, s.name, s.obs
+        FROM study s
+        INNER JOIN user_study us ON s.id = us.studyId
+        WHERE us.userId = ?
+        ORDER BY s.createdAt DESC
+    `;
+
+    db.query(query, [userId], (err, results) => {
+        if (err) {
+            console.error('Erro ao buscar estudos do participante:', err);
+            return res.status(500).json({ 
+                message: 'Erro ao obter estudos do utilizador.', 
+                error: err 
+            });
+        }
+        res.status(200).json(results);
+    });
+});
+
 module.exports = router;
+
+
+

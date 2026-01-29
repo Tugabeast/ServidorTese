@@ -1,6 +1,6 @@
 const jwt = require('jsonwebtoken');
 require('dotenv').config();
-const { logger } = require('../aux/logger');
+const { logger } = require('../utils/logger');
 
 
 module.exports = (req, res, next) => {
