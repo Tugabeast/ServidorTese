@@ -81,39 +81,60 @@ router.post('/', (req, res) => {
     return res.status(400).json({ message: 'Nenhuma categoria selecionada.' });
   }
 
-  db.beginTransaction((err) => {
-    if (err) return res.status(500).json({ message: 'Erro ao iniciar transação.', error: err });
+  // 1. Obter uma conexão da pool
+  db.getConnection((err, connection) => {
+    if (err) {
+      console.error('Erro ao obter conexão da pool:', err);
+      return res.status(500).json({ message: 'Erro de conexão à base de dados.' });
+    }
 
-    const delSql = `DELETE FROM classification WHERE userId = ? AND postId = ? AND questionId = ?`;
-    db.query(delSql, [userId, postId, questionId], (delErr, delResult) => {
-      if (delErr) {
-        return db.rollback(() =>
-          res.status(500).json({ message: 'Erro ao remover classificações anteriores.', error: delErr })
-        );
+    // 2. Iniciar a transação NA CONEXÃO
+    connection.beginTransaction((err) => {
+      if (err) {
+        connection.release(); // Importante: libertar se falhar
+        return res.status(500).json({ message: 'Erro ao iniciar transação.', error: err });
       }
 
-      const values = all.map(catId => [userId, postId, questionId, catId]);
-      const insSql = `INSERT INTO classification (userId, postId, questionId, categoryId) VALUES ?`;
-
-      db.query(insSql, [values], (insErr) => {
-        if (insErr) {
-          return db.rollback(() =>
-            res.status(500).json({ message: 'Erro ao gravar novas classificações.', error: insErr })
-          );
+      const delSql = `DELETE FROM classification WHERE userId = ? AND postId = ? AND questionId = ?`;
+      
+      // Nota: Usar 'connection.query' e não 'db.query'
+      connection.query(delSql, [userId, postId, questionId], (delErr, delResult) => {
+        if (delErr) {
+          return connection.rollback(() => {
+            connection.release();
+            res.status(500).json({ message: 'Erro ao remover classificações anteriores.', error: delErr });
+          });
         }
 
-        db.commit((commitErr) => {
-          if (commitErr) {
-            return db.rollback(() =>
-              res.status(500).json({ message: 'Erro ao concluir transação.', error: commitErr })
-            );
+        const values = all.map(catId => [userId, postId, questionId, catId]);
+        const insSql = `INSERT INTO classification (userId, postId, questionId, categoryId) VALUES ?`;
+
+        connection.query(insSql, [values], (insErr) => {
+          if (insErr) {
+            return connection.rollback(() => {
+              connection.release();
+              res.status(500).json({ message: 'Erro ao gravar novas classificações.', error: insErr });
+            });
           }
 
-          const status = delResult.affectedRows > 0 ? 200 : 201;
-          const msg = delResult.affectedRows > 0
-            ? 'Classificação atualizada com sucesso.'
-            : 'Classificação registada com sucesso.';
-          return res.status(status).json({ message: msg });
+          // 3. Confirmar a transação
+          connection.commit((commitErr) => {
+            if (commitErr) {
+              return connection.rollback(() => {
+                connection.release();
+                res.status(500).json({ message: 'Erro ao concluir transação.', error: commitErr });
+              });
+            }
+
+            // 4. Libertar a conexão no final
+            connection.release();
+
+            const status = delResult.affectedRows > 0 ? 200 : 201;
+            const msg = delResult.affectedRows > 0
+              ? 'Classificação atualizada com sucesso.'
+              : 'Classificação registada com sucesso.';
+            return res.status(status).json({ message: msg });
+          });
         });
       });
     });
@@ -195,7 +216,7 @@ router.get('/user', (req, res) => {
 
         console.log('✅ Estrutura final enviada para o frontend:', classifiedPosts);
 
-        res.status(201).json(classifiedPosts);
+        res.status(200).json(classifiedPosts);
     });
 });
 

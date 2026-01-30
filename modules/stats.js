@@ -270,5 +270,25 @@ router.get('/general', (req, res) => {
   });
 
 
+router.get('/timeline', (req, res) => {
+  const userId = req.user.id; // Assume que o ID vem no token
+
+  const sql = `
+    SELECT 
+      DATE_FORMAT(createdAt, '%Y-%m-%d') as date, 
+      COUNT(*) as count
+    FROM classification
+    WHERE userId = ?
+    GROUP BY DATE_FORMAT(createdAt, '%Y-%m-%d')
+    ORDER BY date ASC
+  `;
+
+  db.query(sql, [userId], (err, rows) => {
+    if (err) return res.status(500).json({ message: 'Erro ao obter timeline.', error: err });
+    res.status(200).json(rows);
+  });
+});
+
+
 
 module.exports = router;
