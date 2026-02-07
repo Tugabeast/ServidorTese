@@ -1,4 +1,5 @@
 // docs/swagger.js
+require('dotenv').config(); // Carrega as variáveis do .env
 const swaggerJSDoc = require('swagger-jsdoc');
 
 const options = {
@@ -11,7 +12,7 @@ const options = {
         'Documentação da API (OpenAPI 3) – autenticação via Bearer JWT.',
     },
     servers: [
-      { url: 'http://193.137.84.23/api/', description: 'Local' },
+      { url: process.env.SWAGGER_URL, description: 'Local' },
     ],
     components: {
       securitySchemes: {
