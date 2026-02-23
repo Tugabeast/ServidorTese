@@ -11,5 +11,3 @@ const logger = createLogger({
 
 module.exports = { logger };
 
-
-//miguel@gmail.com 

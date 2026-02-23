@@ -420,131 +420,176 @@ router.post('/', async (req, res) => {
 });
 
 
+// LISTAR POSTS (MODO "PRÓXIMO" OU MODO "HISTÓRICO")
 router.get('/', async (req, res) => {
-  const userId = req.user?.id;
-  const selectedStudyId = req.query.studyId; 
+    const userId = req.user?.id;
+    const selectedStudyId = req.query.studyId;
+    const showHistory = req.query.includeClassified === 'true'; 
 
-  console.log('\n================================================');
-  console.log(`📡 ROTA GET /posts CHAMADA`);
-  console.log(`👤 User ID: ${userId}`);
-  console.log(`📥 Parâmetro 'studyId' recebido: "${selectedStudyId}"`);
-
-  if (!userId) {
-    return res.status(401).json({ message: 'Token inválido ou utilizador não autenticado.' });
-  }
-
-  try {
-    // A. Verificar quais estudos o utilizador TEM PERMISSÃO (Tabela user_study)
-    const [studyRows] = await db.promise().query(
-      'SELECT studyId FROM user_study WHERE userId = ?', [userId]
-    );
-    const allowedStudyIds = studyRows.map(row => row.studyId);
-
-    console.log(`✅ IDs permitidos na DB: [${allowedStudyIds.join(', ')}]`);
-
-    if (allowedStudyIds.length === 0) {
-      console.log('⚠️ User sem estudos.');
-      return res.json({ posts: [] });
+    if (!userId) {
+        return res.status(401).json({ message: 'Token inválido.' });
     }
 
-    // B. Definir o Filtro (AQUI ESTÁ A MUDANÇA CRUCIAL)
-    let targetStudyIds = [];
+    try {
+        // A. Verificar permissões
+        const [studyRows] = await db.promise().query(
+            'SELECT studyId FROM user_study WHERE userId = ?', [userId]
+        );
+        const allowedStudyIds = studyRows.map(row => row.studyId);
 
-    if (selectedStudyId && selectedStudyId !== 'undefined' && selectedStudyId !== '') {
-        const idToCheck = parseInt(selectedStudyId, 10);
-        
-        // Se o estudo pedido está na lista de permitidos, usamos APENAS esse.
-        if (allowedStudyIds.includes(idToCheck)) {
-            targetStudyIds = [idToCheck];
-            console.log(`🎯 SUCESSO: Filtro aceite. A buscar posts APENAS do StudyID = ${idToCheck}`);
-        } else {
-            console.warn(`⛔ BLOQUEIO: Tentativa de acesso não autorizado ao estudo ${idToCheck}`);
-            return res.status(403).json({ message: 'Sem permissão para este estudo.' });
+        if (allowedStudyIds.length === 0) return res.json({ posts: [] });
+
+        let targetStudyId = allowedStudyIds[0];
+        if (selectedStudyId && selectedStudyId !== 'undefined' && selectedStudyId !== '') {
+            const idToCheck = parseInt(selectedStudyId, 10);
+            if (allowedStudyIds.includes(idToCheck)) {
+                targetStudyId = idToCheck;
+            } else {
+                return res.status(403).json({ message: 'Sem permissão.' });
+            }
         }
-    } else {
-        // Se não pedir nada, carregamos o primeiro permitido para não misturar tudo
-        targetStudyIds = [allowedStudyIds[0]];
-        console.log(`📂 Sem seleção: A mostrar o default (ID: ${targetStudyIds[0]})`);
+
+        let posts = [];
+
+        // --- LÓGICA DIVIDIDA CONFORME PEDIDO DOS PROFESSORES ---
+        
+        if (showHistory) {
+            // === MODO HISTÓRICO ===
+            // Sem Random. Ordenado por antiguidade (data da classificação)
+            const historyQuery = `
+                SELECT DISTINCT p.*, s.name AS studyName
+                FROM post p
+                JOIN study s ON p.studyId = s.id
+                JOIN classification c ON c.postId = p.id
+                WHERE p.studyId = ? 
+                AND c.userId = ?
+                ORDER BY c.createdAt DESC
+            `;
+            [posts] = await db.promise().query(historyQuery, [targetStudyId, userId]);
+            
+            if (posts.length === 0) {
+                return res.json({ posts: [], message: 'Ainda não classificaste nenhum post neste estudo.' });
+            }
+
+        } else {
+            
+            // 1. Verificar Limite e Calcular quantos posts enviar
+            const checkLimitQuery = `
+                SELECT s.maxClassificationsPerUser,
+                (SELECT COUNT(DISTINCT c.postId) FROM classification c 
+                 JOIN question q ON c.questionId = q.id
+                 WHERE q.studyId = s.id AND c.userId = ?) as total_posts_done
+                FROM study s WHERE s.id = ?
+            `;
+            const [limitResult] = await db.promise().query(checkLimitQuery, [userId, targetStudyId]);
+
+            let limitToFetch = 10; // Tamanho do bloco base (podes mudar para 20 se preferires)
+
+            if (limitResult.length > 0) {
+                const { maxClassificationsPerUser, total_posts_done } = limitResult[0];
+                
+                // Se existe um limite configurado no Estudo
+                if (maxClassificationsPerUser !== null) {
+                    const remaining = maxClassificationsPerUser - total_posts_done;
+                    
+                    if (remaining <= 0) {
+                        return res.json({ 
+                            posts: [], 
+                            message: 'Parabéns! Já atingiste o limite de classificações para este estudo.' 
+                        });
+                    }
+                    
+                    // Garante que só mandamos o número de posts exato que ele precisa para acabar
+                    // Se faltarem 2, envia 2. Se faltarem 50, envia o bloco de 10.
+                    limitToFetch = Math.min(10, remaining); 
+                }
+            }
+
+            // 2. Buscar Lote de Posts Aleatório
+            const getNextPostQuery = `
+                SELECT p.*, s.name AS studyName, s.minClassificationsPerPost
+                FROM post p
+                JOIN study s ON p.studyId = s.id
+                WHERE p.studyId = ?
+                AND NOT EXISTS (
+                    SELECT 1 FROM classification c_user 
+                    WHERE c_user.postId = p.id AND c_user.userId = ?
+                )
+                AND (
+                    SELECT COUNT(DISTINCT c_total.userId) 
+                    FROM classification c_total WHERE c_total.postId = p.id
+                ) < s.minClassificationsPerPost
+                ORDER BY RAND() 
+                LIMIT ?
+            `;
+            
+            // Passamos o `limitToFetch` de forma dinâmica
+            [posts] = await db.promise().query(getNextPostQuery, [targetStudyId, userId, limitToFetch]);
+
+            if (posts.length === 0) {
+                return res.json({ posts: [], message: 'Não existem mais posts disponíveis neste momento.' });
+            }
+        }
+
+        // --- CARREGAMENTO DE DADOS EXTRAS ---
+        const postIds = posts.map(p => p.id);
+
+        const [images] = await db.promise().query(
+            `SELECT postId, image_data, isFrontPage FROM image WHERE postId IN (?)`, [postIds]
+        );
+        const imagesByPost = {};
+        images.forEach(img => {
+            if (!imagesByPost[img.postId]) imagesByPost[img.postId] = [];
+            imagesByPost[img.postId].push({
+                image_data: img.image_data ? img.image_data.toString('base64') : null,
+                isFrontPage: img.isFrontPage
+            });
+        });
+
+        const [questions] = await db.promise().query(
+            `SELECT * FROM question WHERE studyId = ?`, [targetStudyId]
+        );
+        const questionIds = questions.map(q => q.id);
+        
+        let categoriesByQuestion = {};
+        if (questionIds.length > 0) {
+            const [categories] = await db.promise().query(
+                `SELECT * FROM categories WHERE questionId IN (?)`, [questionIds]
+            );
+            categories.forEach(cat => {
+                if (!categoriesByQuestion[cat.questionId]) categoriesByQuestion[cat.questionId] = [];
+                categoriesByQuestion[cat.questionId].push(cat);
+            });
+        }
+
+        const postsWithData = posts.map(post => {
+            const postQuestions = questions.map(q => ({
+                ...q,
+                categories: categoriesByQuestion[q.id] || []
+            }));
+
+            return {
+                id: post.id,
+                pageName: post.pageName,
+                details: post.details,
+                likesCount: post.likesCount,
+                commentsCount: post.commentsCount,
+                sharesCount: post.sharesCount,
+                studyId: post.studyId,
+                studyName: post.studyName,
+                socialName: post.socialName,
+                postLink: post.postLink,
+                images: imagesByPost[post.id] || [],
+                questions: postQuestions
+            };
+        });
+
+        res.status(200).json({ posts: postsWithData });
+
+    } catch (err) {
+        console.error('❌ Erro na rota /posts:', err);
+        res.status(500).json({ message: 'Erro ao receber posts.', error: err });
     }
-
-    // C. Query SQL Principal
-    // O filtro WHERE p.studyId IN (?) vai receber apenas o ID selecionado (ex: [2])
-    const [posts] = await db.promise().query(
-      `SELECT p.*, s.name AS studyName FROM post p
-       INNER JOIN study s ON s.id = p.studyId
-       WHERE p.studyId IN (?)`, [targetStudyIds]
-    );
-
-    console.log(`📦 Posts encontrados: ${posts.length}`);
-
-    if (posts.length === 0) {
-      return res.json({ posts: [] });
-    }
-
-    const postIds = posts.map(p => p.id);
-
-    // D. Buscar Imagens
-    const [images] = await db.promise().query(
-      `SELECT postId, image_data, isFrontPage FROM image WHERE postId IN (?)`, [postIds]
-    );
-    const imagesByPost = {};
-    images.forEach(img => {
-      if (!imagesByPost[img.postId]) imagesByPost[img.postId] = [];
-      imagesByPost[img.postId].push({
-        image_data: img.image_data?.toString('base64') || null,
-        isFrontPage: img.isFrontPage
-      });
-    });
-
-    // E. Buscar Perguntas (Apenas do estudo selecionado)
-    const [questions] = await db.promise().query(
-      `SELECT * FROM question WHERE studyId IN (?)`, [targetStudyIds]
-    );
-    const questionIds = questions.map(q => q.id);
-
-    // F. Buscar Categorias
-    let categoriesByQuestion = {};
-    if (questionIds.length > 0) {
-      const [categories] = await db.promise().query(
-        `SELECT * FROM categories WHERE questionId IN (?)`, [questionIds]
-      );
-      categories.forEach(cat => {
-        if (!categoriesByQuestion[cat.questionId]) categoriesByQuestion[cat.questionId] = [];
-        categoriesByQuestion[cat.questionId].push(cat);
-      });
-    }
-
-    // G. Montar Resposta
-    const postsWithData = posts.map(post => {
-      const postQuestions = questions
-          .filter(q => q.studyId === post.studyId)
-          .map(q => ({
-             ...q,
-             categories: categoriesByQuestion[q.id] || []
-          }));
-
-      return {
-          id: post.id,
-          pageName: post.pageName,
-          details: post.details,
-          likesCount: post.likesCount,
-          commentsCount: post.commentsCount,
-          sharesCount: post.sharesCount,
-          studyId: post.studyId,
-          studyName: post.studyName,
-          images: imagesByPost[post.id] || [],
-          questions: postQuestions,
-      };
-    });
-
-    res.status(200).json({ posts: postsWithData });
-    console.log('✅ Resposta enviada ao frontend.');
-    console.log('================================================\n');
-
-  } catch (err) {
-    console.error('❌ Erro na rota /posts:', err);
-    res.status(500).json({ message: 'Erro ao receber posts.', error: err });
-  }
 });
 
 module.exports = router;
