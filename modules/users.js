@@ -3,6 +3,8 @@ const router = express.Router();
 const bcrypt = require('bcrypt');
 const db = require('../config/db');
 
+// IMPORTAR O LOGGER
+const { logger } = require('../utils/logger');
 
 /**
  * @openapi
@@ -20,12 +22,19 @@ const db = require('../config/db');
  */
 // rota para obter todos os utilizadores
 router.get('/', (req, res) => {
+    logger.info(`[USERS - GET ALL] Pedido para listar todos os utilizadores (Solicitado por UserID: ${req.user?.id})`);
+
     const query = `
         SELECT id, username, email, type, createdAt, updatedAt, createdBy, updatedBy
         FROM user
     `;
     db.query(query, (err, results) => {
-        if (err) return res.status(500).json({ message: 'Erro ao procurar utilizadores', error: err });
+        if (err) {
+            logger.error(`[USERS - GET ALL] Erro na BD ao listar utilizadores. MSG: ${err.message}`, { stack: err.stack });
+            return res.status(500).json({ message: 'Erro ao procurar utilizadores', error: err });
+        }
+        
+        logger.debug(`[USERS - GET ALL] Sucesso: Devolvidos ${results.length} utilizadores.`);
         res.status(200).json(results);
     });
 });
@@ -66,34 +75,52 @@ router.get('/', (req, res) => {
 router.post('/', async (req, res) => {
     const { username, password, email, type, createdBy } = req.body;
 
+    logger.info(`[USERS - POST] Pedido (Admin) para criar novo utilizador '${username}' (${email})`);
+
     if (!username || !password || !email || !type) {
+        logger.warn(`[USERS - POST] Falha: Campos obrigatórios em falta para criar utilizador.`);
         return res.status(400).json({ message: 'Campos obrigatórios em falta.' });
     }
 
     const checkQuery = 'SELECT username FROM user WHERE username = ? OR email = ?';
     db.query(checkQuery, [username, email], async (err, results) => {
-        if (err) return res.status(500).json({ message: 'Erro no servidor', error: err });
+        if (err) {
+            logger.error(`[USERS - POST] Erro na BD ao verificar duplicação do utilizador '${username}'. MSG: ${err.message}`, { stack: err.stack });
+            return res.status(500).json({ message: 'Erro no servidor', error: err });
+        }
 
         if (results.length > 0) {
+            logger.warn(`[USERS - POST] Falha: Utilizador ou email já registado ('${username}' / '${email}')`);
             return res.status(409).json({ message: 'Utilizador ou email já registado.' });
         }
 
-        const hashedPassword = await bcrypt.hash(password, 10);
+        try {
+            const hashedPassword = await bcrypt.hash(password, 10);
 
-        const insertQuery = `
-            INSERT INTO user (username, password, email, type, createdBy, updatedBy, createdAt, updatedAt)
-            VALUES (?, ?, ?, ?, ?, NULL, NOW(), NULL)
-        `;
-        db.query(
-            insertQuery,
-            [username, hashedPassword, email, type, createdBy || 'admin'],
-            (err) => {
-                if (err) return res.status(500).json({ message: 'Erro ao criar utilizador', error: err });
-                res.status(201).json({ message: 'Utilizador adicionado com sucesso.' });
-            }
-        );
+            const insertQuery = `
+                INSERT INTO user (username, password, email, type, createdBy, updatedBy, createdAt, updatedAt)
+                VALUES (?, ?, ?, ?, ?, NULL, NOW(), NULL)
+            `;
+            db.query(
+                insertQuery,
+                [username, hashedPassword, email, type, createdBy || 'admin'],
+                (err) => {
+                    if (err) {
+                        logger.error(`[USERS - POST] Erro na BD ao inserir utilizador '${username}'. MSG: ${err.message}`, { stack: err.stack });
+                        return res.status(500).json({ message: 'Erro ao criar utilizador', error: err });
+                    }
+                    
+                    logger.info(`[USERS - POST] Sucesso: Utilizador '${username}' criado por '${createdBy || 'admin'}'`);
+                    res.status(201).json({ message: 'Utilizador adicionado com sucesso.' });
+                }
+            );
+        } catch (hashErr) {
+            logger.error(`[USERS - POST] Erro ao aplicar hash na password de '${username}'. MSG: ${hashErr.message}`, { stack: hashErr.stack });
+            return res.status(500).json({ message: 'Erro interno ao processar dados de segurança', error: hashErr });
+        }
     });
 });
+
 
 /**
  * @openapi
@@ -120,18 +147,27 @@ router.post('/', async (req, res) => {
 // rota para obter user por id
 router.get('/:userId', (req, res) => {
     const { userId } = req.params;
+    
+    logger.info(`[USERS - GET BY ID] Pedido para detalhes do UserID: ${userId}`);
+
     const query = `
         SELECT id, username, email, type, createdAt, updatedAt, createdBy, updatedBy
         FROM user
         WHERE id = ?
     `;
     db.query(query, [userId], (err, results) => {
-        if (err) return res.status(500).json({ message: 'Erro ao procurar utilizador', error: err });
-        if (results.length === 0) return res.status(404).json({ message: 'Utilizador não encontrado' });
+        if (err) {
+            logger.error(`[USERS - GET BY ID] Erro na BD ao procurar UserID: ${userId}. MSG: ${err.message}`, { stack: err.stack });
+            return res.status(500).json({ message: 'Erro ao procurar utilizador', error: err });
+        }
+        if (results.length === 0) {
+            logger.warn(`[USERS - GET BY ID] Falha: UserID: ${userId} não encontrado.`);
+            return res.status(404).json({ message: 'Utilizador não encontrado' });
+        }
+        
         res.status(200).json(results[0]);
     });
 });
-
 
 
 /**
@@ -176,7 +212,10 @@ router.put('/:userId', async (req, res) => {
     const { username, email, type, password, updatedBy } = req.body;
     const { userId } = req.params;
 
+    logger.info(`[USERS - PUT] Pedido (Admin) para atualizar UserID: ${userId} (Novo Username: '${username}')`);
+
     if (!username || !email || !type) {
+        logger.warn(`[USERS - PUT] Falha: Campos obrigatórios em falta no UserID: ${userId}`);
         return res.status(400).json({ message: 'Username, email e tipo são obrigatórios.' });
     }
 
@@ -198,17 +237,22 @@ router.put('/:userId', async (req, res) => {
         db.query(query, params, (err, result) => {
             if (err) {
                 if (err.code === 'ER_DUP_ENTRY') {
+                    logger.warn(`[USERS - PUT] Falha (ER_DUP_ENTRY): Conflito ao atualizar UserID: ${userId}. Já existe username ou email.`);
                     return res.status(409).json({ message: 'Username ou email já existe.' });
                 }
+                logger.error(`[USERS - PUT] Erro na BD ao atualizar UserID: ${userId}. MSG: ${err.message}`, { stack: err.stack });
                 return res.status(500).json({ message: 'Erro ao atualizar utilizador', error: err });
             }
             if (result.affectedRows === 0) {
+                logger.warn(`[USERS - PUT] Falha: UserID: ${userId} não encontrado para atualizar.`);
                 return res.status(404).json({ message: 'Utilizador não encontrado.' });
             }
 
+            logger.info(`[USERS - PUT] Sucesso: UserID: ${userId} atualizado com sucesso por '${updatedBy || 'system'}'.`);
             res.status(200).json({ message: 'Utilizador atualizado com sucesso.' });
         });
     } catch (err) {
+        logger.error(`[USERS - PUT] Erro crítico bloqueado no try/catch (UserID: ${userId}). MSG: ${err.message}`, { stack: err.stack });
         res.status(500).json({ message: 'Erro interno do servidor', error: err });
     }
 });
@@ -239,11 +283,20 @@ router.put('/:userId', async (req, res) => {
 router.delete('/:userId', (req, res) => {
     const { userId } = req.params;
 
+    logger.info(`[USERS - DELETE] Pedido para apagar UserID: ${userId}`);
+
     const query = 'DELETE FROM user WHERE id = ?';
     db.query(query, [userId], (err, result) => {
-        if (err) return res.status(500).json({ message: 'Erro ao eliminar utilizador', error: err });
-        if (result.affectedRows === 0) return res.status(404).json({ message: 'Utilizador não encontrado.' });
+        if (err) {
+            logger.error(`[USERS - DELETE] Erro na BD ao apagar UserID: ${userId}. MSG: ${err.message}`, { stack: err.stack });
+            return res.status(500).json({ message: 'Erro ao eliminar utilizador', error: err });
+        }
+        if (result.affectedRows === 0) {
+            logger.warn(`[USERS - DELETE] Falha: UserID: ${userId} não encontrado para eliminar.`);
+            return res.status(404).json({ message: 'Utilizador não encontrado.' });
+        }
 
+        logger.info(`[USERS - DELETE] Sucesso: UserID: ${userId} apagado com sucesso.`);
         res.status(200).json({ message: 'Utilizador removido com sucesso.' });
     });
 });
@@ -286,16 +339,33 @@ router.post('/:userId/studies', (req, res) => {
   const { userId } = req.params;
   const { studyId } = req.body;
 
-  if (!studyId) return res.status(400).json({ message: 'ID do estudo em falta.' });
+  logger.info(`[USER_STUDY - POST] Pedido para associar UserID: ${userId} ao Estudo ID: ${studyId}`);
+
+  if (!studyId) {
+      logger.warn(`[USER_STUDY - POST] Falha: ID do estudo em falta ao associar UserID: ${userId}`);
+      return res.status(400).json({ message: 'ID do estudo em falta.' });
+  }
 
   const checkQuery = 'SELECT * FROM user_study WHERE userId = ? AND studyId = ?';
   db.query(checkQuery, [userId, studyId], (err, result) => {
-    if (err) return res.status(500).json({ message: 'Erro ao verificar associação.', error: err });
-    if (result.length > 0) return res.status(409).json({ message: 'Associação já existente.' });
+    if (err) {
+        logger.error(`[USER_STUDY - POST] Erro na BD ao verificar associação entre UserID: ${userId} e Estudo ID: ${studyId}. MSG: ${err.message}`, { stack: err.stack });
+        return res.status(500).json({ message: 'Erro ao verificar associação.', error: err });
+    }
+    
+    if (result.length > 0) {
+        logger.warn(`[USER_STUDY - POST] Falha: Associação já existente (UserID: ${userId}, Estudo ID: ${studyId})`);
+        return res.status(409).json({ message: 'Associação já existente.' });
+    }
 
     const insertQuery = 'INSERT INTO user_study (userId, studyId) VALUES (?, ?)';
     db.query(insertQuery, [userId, studyId], (err) => {
-      if (err) return res.status(500).json({ message: 'Erro ao associar utilizador ao estudo.', error: err });
+      if (err) {
+          logger.error(`[USER_STUDY - POST] Erro na BD ao inserir associação entre UserID: ${userId} e Estudo ID: ${studyId}. MSG: ${err.message}`, { stack: err.stack });
+          return res.status(500).json({ message: 'Erro ao associar utilizador ao estudo.', error: err });
+      }
+      
+      logger.info(`[USER_STUDY - POST] Sucesso: UserID: ${userId} associado ao Estudo ID: ${studyId}`);
       res.status(201).json({ message: 'Utilizador associado com sucesso.' });
     });
   });
@@ -325,13 +395,20 @@ router.post('/:userId/studies', (req, res) => {
 router.get('/:userId/studies', (req, res) => {
   const { userId } = req.params;
 
+  logger.info(`[USER_STUDY - GET] Pedido para listar estudos associados ao UserID: ${userId}`);
+
   const query = `
     SELECT s.* FROM user_study us
     JOIN study s ON s.id = us.studyId
     WHERE us.userId = ?
   `;
   db.query(query, [userId], (err, results) => {
-    if (err) return res.status(500).json({ message: 'Erro ao obter estudos.', error: err });
+    if (err) {
+        logger.error(`[USER_STUDY - GET] Erro na BD ao listar estudos do UserID: ${userId}. MSG: ${err.message}`, { stack: err.stack });
+        return res.status(500).json({ message: 'Erro ao obter estudos.', error: err });
+    }
+    
+    logger.debug(`[USER_STUDY - GET] Sucesso: Devolvidos ${results.length} estudos para o UserID: ${userId}`);
     res.status(200).json(results);
   });
 });
@@ -366,11 +443,20 @@ router.get('/:userId/studies', (req, res) => {
 router.delete('/:userId/studies/:studyId', (req, res) => {
   const { userId, studyId } = req.params;
 
+  logger.info(`[USER_STUDY - DELETE] Pedido para remover a associação do UserID: ${userId} com o Estudo ID: ${studyId}`);
+
   const deleteQuery = 'DELETE FROM user_study WHERE userId = ? AND studyId = ?';
   db.query(deleteQuery, [userId, studyId], (err, result) => {
-    if (err) return res.status(500).json({ message: 'Erro ao remover associação.', error: err });
-    if (result.affectedRows === 0) return res.status(404).json({ message: 'Associação não encontrada.' });
+    if (err) {
+        logger.error(`[USER_STUDY - DELETE] Erro na BD ao apagar a associação. MSG: ${err.message}`, { stack: err.stack });
+        return res.status(500).json({ message: 'Erro ao remover associação.', error: err });
+    }
+    if (result.affectedRows === 0) {
+        logger.warn(`[USER_STUDY - DELETE] Falha: Associação não encontrada (UserID: ${userId}, Estudo ID: ${studyId})`);
+        return res.status(404).json({ message: 'Associação não encontrada.' });
+    }
 
+    logger.info(`[USER_STUDY - DELETE] Sucesso: Estudo ID: ${studyId} removido do utilizador UserID: ${userId}`);
     res.status(200).json({ message: 'Estudo do utilizador removido com sucesso.' });
   });
 });

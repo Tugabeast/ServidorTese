@@ -2,6 +2,9 @@ const express = require('express');
 const router = express.Router();
 const db = require('../config/db');
 
+// IMPORTAR O LOGGER
+const { logger } = require('../utils/logger');
+
 /**
  * @openapi
  * /stats/user:
@@ -28,6 +31,9 @@ const db = require('../config/db');
 //  ESTATÍSTICAS DO USER com sessao iniciada
 router.get('/user', (req, res) => {
   const username = req.user.username;
+  
+  logger.info(`[STATS - GET USER] Pedido de estatísticas pessoais para o utilizador: ${username}`);
+
   const sql = `
     /* Contagem por categoria dentro de cada (post, pergunta) */
     WITH CatCounts AS (
@@ -114,8 +120,15 @@ router.get('/user', (req, res) => {
     FROM Weights;
   `;
   db.query(sql, [username], (err, rows) => {
-    if (err) return res.status(500).json({ message: 'Erro ao obter estatísticas.', error: err });
-    res.status(200).json(rows[0] || { validated: 0, not_validated: 0 });
+    if (err) {
+        logger.error(`[STATS - GET USER] Erro na BD ao calcular estatísticas para ${username}. MSG: ${err.message}`, { stack: err.stack });
+        return res.status(500).json({ message: 'Erro ao obter estatísticas.', error: err });
+    }
+    
+    const stats = rows[0] || { validated: 0, not_validated: 0 };
+    logger.debug(`[STATS - GET USER] Sucesso: Estatísticas de ${username} geradas. Validadas: ${stats.validated}, Não Validadas: ${stats.not_validated}`);
+    
+    res.status(200).json(stats);
   });
 });
 
@@ -154,6 +167,8 @@ router.get('/general', (req, res) => {
     const userId = req.user.id; // <--- Precisamos do ID para verificar a tabela user_study
     const userType = req.user.type;
   
+    logger.info(`[STATS - GET GENERAL] Pedido de estatísticas gerais e anonimizadas pelo UserID: ${userId} (Tipo: ${userType})`);
+
     const sql = `
       /* Contagem por categoria dentro de cada (post, pergunta) */
       WITH CatCounts AS (
@@ -237,7 +252,7 @@ router.get('/general', (req, res) => {
         
         /* NOVA CONDIÇÃO:
            Só mostramos users que estejam num estudo partilhado com o user logado.
-           Se o user logado for 'investigator', mostra tudo (ou remove essa linha se quiseres restringir também).
+           Se o user logado for 'investigator', mostra tudo.
         */
         AND (
             ? = 'investigator'
@@ -264,14 +279,52 @@ router.get('/general', (req, res) => {
     // 4. userId (para o WHERE do filtro - user_study)
     
     db.query(sql, [userType, loggedUser, userType, userId], (err, rows) => {
-      if (err) return res.status(500).json({ message: 'Erro ao obter estatísticas.', error: err });
+      if (err) {
+          logger.error(`[STATS - GET GENERAL] Erro na BD ao agregar estatísticas gerais para UserID: ${userId}. MSG: ${err.message}`, { stack: err.stack });
+          return res.status(500).json({ message: 'Erro ao obter estatísticas.', error: err });
+      }
+
+      logger.debug(`[STATS - GET GENERAL] Sucesso: Dados de ${rows.length} utilizadores processados e enviados para o UserID: ${userId}`);
       res.status(200).json(rows);
     });
   });
 
-
+/**
+ * @openapi
+ * /stats/timeline:
+ *   get:
+ *     tags: [Statistics]
+ *     summary: Obter timeline de atividade do utilizador autenticado
+ *     description: |
+ *       Retorna o número de classificações feitas pelo utilizador autenticado,
+ *       agrupadas por dia (formato YYYY-MM-DD).
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Timeline retornada com sucesso.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 type: object
+ *                 properties:
+ *                   date:
+ *                     type: string
+ *                     example: "2026-02-20"
+ *                   count:
+ *                     type: integer
+ *                     example: 15
+ *       401:
+ *         description: Não autenticado (token inválido ou ausente).
+ *       500:
+ *         description: Erro ao obter timeline.
+ */
 router.get('/timeline', (req, res) => {
   const userId = req.user.id; // Assume que o ID vem no token
+
+  logger.info(`[STATS - GET TIMELINE] Pedido de atividade (timeline) para o UserID: ${userId}`);
 
   const sql = `
     SELECT 
@@ -284,11 +337,15 @@ router.get('/timeline', (req, res) => {
   `;
 
   db.query(sql, [userId], (err, rows) => {
-    if (err) return res.status(500).json({ message: 'Erro ao obter timeline.', error: err });
+    if (err) {
+        logger.error(`[STATS - GET TIMELINE] Erro na BD ao buscar timeline do UserID: ${userId}. MSG: ${err.message}`, { stack: err.stack });
+        return res.status(500).json({ message: 'Erro ao obter timeline.', error: err });
+    }
+    
+    logger.debug(`[STATS - GET TIMELINE] Sucesso: Timeline retornada com ${rows.length} dias registados para o UserID: ${userId}`);
     res.status(200).json(rows);
   });
 });
-
 
 
 module.exports = router;

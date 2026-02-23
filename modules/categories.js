@@ -2,6 +2,8 @@ const express = require('express');
 const router = express.Router();
 const db = require('../config/db');
 
+const { logger } = require('../utils/logger');
+
 function toSlug(s) {
   return String(s || '')
     .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // remove acentos
@@ -53,7 +55,10 @@ const TYPE_RE = /^[a-z][a-z_-]{1,29}$/; // 2–30 chars, sem dígitos
 router.get('/', (req, res) => {
   const { username } = req.query;
 
+  logger.info(`[CATEGORIES - GET] Pedido para listar categorias do investigador: ${username || 'NÃO FORNECIDO'}`);
+
   if (!username) {
+    logger.warn(`[CATEGORIES - GET] Falha: Nome de utilizador não fornecido.`);
     return res.status(400).json({ message: 'Nome de utilizador não fornecido.' });
   }
 
@@ -67,7 +72,11 @@ router.get('/', (req, res) => {
   `;
 
   db.query(query, [username], (err, results) => {
-    if (err) return res.status(500).json({ message: 'Erro ao procurar categorias.', error: err });
+    if (err) {
+        logger.error(`[CATEGORIES - GET] Erro na DB ao procurar categorias para ${username}. MSG: ${err.message}`, { stack: err.stack });
+        return res.status(500).json({ message: 'Erro ao procurar categorias.', error: err });
+    }
+    logger.info(`[CATEGORIES - GET] Sucesso: ${results.length} categorias encontradas para ${username}.`);
     res.status(200).json(results);
   });
 });
@@ -102,6 +111,8 @@ router.get('/', (req, res) => {
 router.get('/types', (req, res) => {
   const { username } = req.query;
 
+  logger.info(`[CATEGORIES - TYPES] Pedido de tipos de categoria. Investigador filtro: ${username || 'NENHUM'}`);
+
   let sql;
   let params = [];
   if (username) {
@@ -127,7 +138,10 @@ router.get('/types', (req, res) => {
   }
 
   db.query(sql, params, (err, rows) => {
-    if (err) return res.status(500).json({ message: 'Erro ao obter tipos.', error: err });
+    if (err) {
+        logger.error(`[CATEGORIES - TYPES] Erro na DB ao obter tipos. MSG: ${err.message}`, { stack: err.stack });
+        return res.status(500).json({ message: 'Erro ao obter tipos.', error: err });
+    }
     res.json((rows || []).map(r => r.categoryType));
   });
 });
@@ -162,20 +176,30 @@ router.get('/types', (req, res) => {
 router.post('/', (req, res) => {
   const { name, categoryType, questionId } = req.body;
 
+  logger.info(`[CATEGORIES - POST] Pedido para criar categoria '${name}' associada à questão ID: ${questionId}`);
+
   if (!name || !categoryType || !questionId) {
+    logger.warn(`[CATEGORIES - POST] Falha: Campos obrigatórios em falta.`);
     return res.status(400).json({ message: 'Campos obrigatórios em falta.' });
   }
 
   const normalizedType = toSlug(categoryType);
   if (!normalizedType || !TYPE_RE.test(normalizedType)) {
+    logger.warn(`[CATEGORIES - POST] Falha: Tipo de categoria inválido após normalização ('${categoryType}' -> '${normalizedType}')`);
     return res.status(400).json({ message: 'Tipo de categoria inválido.' });
   }
 
   // 1) garantir que a pergunta existe e obter o studyId
   const qStudy = 'SELECT studyId FROM question WHERE id = ?';
   db.query(qStudy, [questionId], (err, rows) => {
-    if (err) return res.status(500).json({ message: 'Erro ao verificar pergunta.', error: err });
-    if (!rows.length) return res.status(400).json({ message: 'Pergunta inválida.' });
+    if (err) {
+        logger.error(`[CATEGORIES - POST] Erro na DB ao verificar pergunta ID: ${questionId}. MSG: ${err.message}`, { stack: err.stack });
+        return res.status(500).json({ message: 'Erro ao verificar pergunta.', error: err });
+    }
+    if (!rows.length) {
+        logger.warn(`[CATEGORIES - POST] Falha: Pergunta ID ${questionId} não existe.`);
+        return res.status(400).json({ message: 'Pergunta inválida.' });
+    }
 
     const studyId = rows[0].studyId;
 
@@ -187,8 +211,12 @@ router.post('/', (req, res) => {
       WHERE c.name = ? AND q.studyId = ?
     `;
     db.query(dup, [name, studyId], (err2, r2) => {
-      if (err2) return res.status(500).json({ message: 'Erro ao verificar duplicação.', error: err2 });
+      if (err2) {
+          logger.error(`[CATEGORIES - POST] Erro na DB ao verificar duplicação. MSG: ${err2.message}`, { stack: err2.stack });
+          return res.status(500).json({ message: 'Erro ao verificar duplicação.', error: err2 });
+      }
       if (r2[0].cnt > 0) {
+        logger.warn(`[CATEGORIES - POST] Falha: Categoria '${name}' já existe no Estudo ID: ${studyId}`);
         return res.status(409).json({ message: 'Já existe uma categoria com esse nome neste estudo.' });
       }
 
@@ -198,7 +226,11 @@ router.post('/', (req, res) => {
         VALUES (?, ?, ?, NOW())
       `;
       db.query(ins, [name, normalizedType, questionId], (err3) => {
-        if (err3) return res.status(500).json({ message: 'Erro ao criar categoria.', error: err3 });
+        if (err3) {
+            logger.error(`[CATEGORIES - POST] Erro na DB ao criar categoria '${name}'. MSG: ${err3.message}`, { stack: err3.stack });
+            return res.status(500).json({ message: 'Erro ao criar categoria.', error: err3 });
+        }
+        logger.info(`[CATEGORIES - POST] Sucesso: Categoria '${name}' criada no Estudo ID: ${studyId} (Questão ID: ${questionId})`);
         res.status(201).json({ message: 'Categoria criada com sucesso.' });
       });
     });
@@ -242,20 +274,30 @@ router.put('/:categoryId', (req, res) => {
   const { name, categoryType, questionId } = req.body;
   const { categoryId } = req.params;
 
+  logger.info(`[CATEGORIES - PUT] Pedido para atualizar categoria ID: ${categoryId} para '${name}' (Questão ID: ${questionId})`);
+
   if (!name || !categoryType || !questionId) {
+    logger.warn(`[CATEGORIES - PUT] Falha: Campos obrigatórios em falta no ID: ${categoryId}`);
     return res.status(400).json({ message: 'Campos obrigatórios em falta.' });
   }
 
   const normalizedType = toSlug(categoryType);
   if (!normalizedType || !TYPE_RE.test(normalizedType)) {
+    logger.warn(`[CATEGORIES - PUT] Falha: Tipo de categoria inválido ('${categoryType}') no ID: ${categoryId}`);
     return res.status(400).json({ message: 'Tipo de categoria inválido.' });
   }
 
   // 1) obter o studyId a partir da pergunta escolhida
   const qStudy = 'SELECT studyId FROM question WHERE id = ?';
   db.query(qStudy, [questionId], (err, rows) => {
-    if (err) return res.status(500).json({ message: 'Erro ao verificar pergunta.', error: err });
-    if (!rows.length) return res.status(400).json({ message: 'Pergunta inválida.' });
+    if (err) {
+        logger.error(`[CATEGORIES - PUT] Erro na DB ao verificar pergunta ID: ${questionId}. MSG: ${err.message}`, { stack: err.stack });
+        return res.status(500).json({ message: 'Erro ao verificar pergunta.', error: err });
+    }
+    if (!rows.length) {
+        logger.warn(`[CATEGORIES - PUT] Falha: Pergunta ID ${questionId} não existe.`);
+        return res.status(400).json({ message: 'Pergunta inválida.' });
+    }
 
     const studyId = rows[0].studyId;
 
@@ -267,8 +309,12 @@ router.put('/:categoryId', (req, res) => {
       WHERE c.name = ? AND q.studyId = ? AND c.id <> ?
     `;
     db.query(dup, [name, studyId, categoryId], (err2, r2) => {
-      if (err2) return res.status(500).json({ message: 'Erro ao verificar duplicação.', error: err2 });
+      if (err2) {
+          logger.error(`[CATEGORIES - PUT] Erro na DB ao verificar duplicação (Update ID: ${categoryId}). MSG: ${err2.message}`, { stack: err2.stack });
+          return res.status(500).json({ message: 'Erro ao verificar duplicação.', error: err2 });
+      }
       if (r2[0].cnt > 0) {
+        logger.warn(`[CATEGORIES - PUT] Falha: Categoria '${name}' já existe no Estudo ID: ${studyId} (Colisão com ID: ${categoryId})`);
         return res.status(409).json({ message: 'Já existe uma categoria com esse nome neste estudo.' });
       }
 
@@ -279,8 +325,16 @@ router.put('/:categoryId', (req, res) => {
         WHERE id = ?
       `;
       db.query(upd, [name, normalizedType, questionId, categoryId], (err3, r3) => {
-        if (err3) return res.status(500).json({ message: 'Erro ao atualizar categoria.', error: err3 });
-        if (r3.affectedRows === 0) return res.status(404).json({ message: 'Categoria não encontrada.' });
+        if (err3) {
+            logger.error(`[CATEGORIES - PUT] Erro na DB ao atualizar categoria ID: ${categoryId}. MSG: ${err3.message}`, { stack: err3.stack });
+            return res.status(500).json({ message: 'Erro ao atualizar categoria.', error: err3 });
+        }
+        if (r3.affectedRows === 0) {
+            logger.warn(`[CATEGORIES - PUT] Falha: Categoria ID: ${categoryId} não encontrada para atualização.`);
+            return res.status(404).json({ message: 'Categoria não encontrada.' });
+        }
+        
+        logger.info(`[CATEGORIES - PUT] Sucesso: Categoria ID: ${categoryId} atualizada com sucesso.`);
         res.status(200).json({ message: 'Categoria atualizada com sucesso.' });
       });
     });
@@ -310,9 +364,20 @@ router.put('/:categoryId', (req, res) => {
 // ELIMINAR CATEGORIA
 router.delete('/:categoryId', (req, res) => {
   const { categoryId } = req.params;
+
+  logger.info(`[CATEGORIES - DELETE] Pedido para apagar categoria ID: ${categoryId}`);
+
   db.query('DELETE FROM categories WHERE id = ?', [categoryId], (err, result) => {
-    if (err) return res.status(500).json({ message: 'Erro ao apagar categoria.', error: err });
-    if (result.affectedRows === 0) return res.status(404).json({ message: 'Categoria não encontrada.' });
+    if (err) {
+        logger.error(`[CATEGORIES - DELETE] Erro na DB ao apagar categoria ID: ${categoryId}. MSG: ${err.message}`, { stack: err.stack });
+        return res.status(500).json({ message: 'Erro ao apagar categoria.', error: err });
+    }
+    if (result.affectedRows === 0) {
+        logger.warn(`[CATEGORIES - DELETE] Falha: Categoria ID: ${categoryId} não encontrada para eliminação.`);
+        return res.status(404).json({ message: 'Categoria não encontrada.' });
+    }
+    
+    logger.info(`[CATEGORIES - DELETE] Sucesso: Categoria ID: ${categoryId} apagada com sucesso.`);
     res.status(200).json({ message: 'Categoria apagada com sucesso.' });
   });
 });

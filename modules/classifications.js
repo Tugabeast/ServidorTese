@@ -2,6 +2,8 @@ const express = require('express');
 const router = express.Router();
 const db = require('../config/db');
 
+const { logger } = require('../utils/logger');
+
 /**
  * @openapi
  * /classifications:
@@ -69,7 +71,10 @@ router.post('/', (req, res) => {
   const { postId, questionId, categoryIds, sentimentoCategoryIds } = req.body;
   const userId = req.user.id;
 
+  logger.info(`[CLASSIFICATIONS - POST] Início de classificação. UserID: ${userId} | PostID: ${postId} | QuestionID: ${questionId}`);
+
   if (!postId || !questionId) {
+    logger.warn(`[CLASSIFICATIONS - POST] Falha: postId ou questionId em falta. UserID: ${userId}`);
     return res.status(400).json({ message: 'postId e questionId são obrigatórios.' });
   }
 
@@ -78,13 +83,14 @@ router.post('/', (req, res) => {
   const all = [...thematic, ...sentiment];
 
   if (all.length === 0) {
+    logger.warn(`[CLASSIFICATIONS - POST] Falha: Nenhuma categoria selecionada. UserID: ${userId} | PostID: ${postId}`);
     return res.status(400).json({ message: 'Nenhuma categoria selecionada.' });
   }
 
   // 1. Obter uma conexão da pool
   db.getConnection((err, connection) => {
     if (err) {
-      console.error('Erro ao obter conexão da pool:', err);
+      logger.error(`[CLASSIFICATIONS - POST] Erro ao obter conexão da pool da Base de Dados. MSG: ${err.message}`, { stack: err.stack });
       return res.status(500).json({ message: 'Erro de conexão à base de dados.' });
     }
 
@@ -92,6 +98,7 @@ router.post('/', (req, res) => {
     connection.beginTransaction((err) => {
       if (err) {
         connection.release(); // Importante: libertar se falhar
+        logger.error(`[CLASSIFICATIONS - POST] Erro ao iniciar transação SQL. MSG: ${err.message}`, { stack: err.stack });
         return res.status(500).json({ message: 'Erro ao iniciar transação.', error: err });
       }
 
@@ -102,6 +109,7 @@ router.post('/', (req, res) => {
         if (delErr) {
           return connection.rollback(() => {
             connection.release();
+            logger.error(`[CLASSIFICATIONS - POST] Transação revertida. Erro ao remover classificação antiga. MSG: ${delErr.message}`, { stack: delErr.stack });
             res.status(500).json({ message: 'Erro ao remover classificações anteriores.', error: delErr });
           });
         }
@@ -113,6 +121,7 @@ router.post('/', (req, res) => {
           if (insErr) {
             return connection.rollback(() => {
               connection.release();
+              logger.error(`[CLASSIFICATIONS - POST] Transação revertida. Erro ao inserir nova classificação. MSG: ${insErr.message}`, { stack: insErr.stack });
               res.status(500).json({ message: 'Erro ao gravar novas classificações.', error: insErr });
             });
           }
@@ -122,6 +131,7 @@ router.post('/', (req, res) => {
             if (commitErr) {
               return connection.rollback(() => {
                 connection.release();
+                logger.error(`[CLASSIFICATIONS - POST] Transação revertida. Erro no commit da classificação. MSG: ${commitErr.message}`, { stack: commitErr.stack });
                 res.status(500).json({ message: 'Erro ao concluir transação.', error: commitErr });
               });
             }
@@ -133,6 +143,8 @@ router.post('/', (req, res) => {
             const msg = delResult.affectedRows > 0
               ? 'Classificação atualizada com sucesso.'
               : 'Classificação registada com sucesso.';
+              
+            logger.info(`[CLASSIFICATIONS - POST] Sucesso: ${msg} (UserID: ${userId}, PostID: ${postId}, Categorias: [${all.join(', ')}])`);
             return res.status(status).json({ message: msg });
           });
         });
@@ -140,7 +152,6 @@ router.post('/', (req, res) => {
     });
   });
 });
-
 
 /**
  * @openapi
@@ -181,7 +192,8 @@ router.post('/', (req, res) => {
 // CLASSIFICAÇÕES DO USER com sessão iniciada
 router.get('/user', (req, res) => {
     const userId = req.user.id;
-    console.log('🔐 Utilizador autenticado:', userId);
+    
+    logger.info(`[CLASSIFICATIONS - GET USER] Pedido para obter histórico de classificações. UserID: ${userId}`);
 
     const query = `
         SELECT cl.postId, cl.questionId, cl.categoryId, c.categoryType
@@ -192,11 +204,12 @@ router.get('/user', (req, res) => {
 
     db.query(query, [userId], (err, results) => {
         if (err) {
-            console.error('❌ Erro ao buscar classificações do user:', err);
+            logger.error(`[CLASSIFICATIONS - GET USER] Erro na BD ao buscar classificações do UserID: ${userId}. MSG: ${err.message}`, { stack: err.stack });
             return res.status(500).json({ message: 'Erro ao buscar classificações.', error: err });
         }
 
-        console.log('📥 Resultados da base de dados:', results);
+        // Se quiseres ver os resultados brutos em desenvolvimento, usa 'debug' em vez de encheres o 'info'
+        logger.debug(`[CLASSIFICATIONS - GET USER] Resultados da base de dados recebidos para UserID: ${userId}. (Total linhas: ${results.length})`);
 
         const classifiedPosts = {};
         results.forEach(({ postId, questionId, categoryId, categoryType }) => {
@@ -214,7 +227,7 @@ router.get('/user', (req, res) => {
             }
         });
 
-        console.log('✅ Estrutura final enviada para o frontend:', classifiedPosts);
+        logger.info(`[CLASSIFICATIONS - GET USER] Sucesso: Estrutura de classificações montada e enviada para UserID: ${userId}.`);
 
         res.status(200).json(classifiedPosts);
     });

@@ -4,6 +4,10 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const db = require('../config/db');
 require('dotenv').config();
+
+// IMPORTAR O LOGGER
+const { logger } = require('../utils/logger');
+
 /**
  * @openapi
  * /auth/register:
@@ -53,15 +57,22 @@ require('dotenv').config();
 router.post('/register', async (req, res) => {
     const { username, email, password } = req.body;
 
+    logger.info(`[AUTH - REGISTER] Pedido de registo iniciado para o email: ${email}`);
+
     if (!username || !email || !password) {
+        logger.warn(`[AUTH - REGISTER] Falha: Campos obrigatórios em falta. Email recebido: ${email}`);
         return res.status(400).json({ message: 'Todos os campos são obrigatórios.' });
     }
 
     const checkQuery = 'SELECT username FROM user WHERE username = ? OR email = ?';
     db.query(checkQuery, [username, email], async (err, results) => {    
-        if (err) return res.status(500).json({ message: 'Erro no servidor', error: err });
+        if (err) {
+            logger.error(`[AUTH - REGISTER] Erro na base de dados ao verificar duplicação. MSG: ${err.message}`, { stack: err.stack });
+            return res.status(500).json({ message: 'Erro no servidor', error: err });
+        }
 
         if (results.length > 0) {
+            logger.warn(`[AUTH - REGISTER] Falha: Tentativa de registo com utilizador ou email já existente (${email} / ${username})`);
             return res.status(409).json({ message: 'Utilizador ou email já registado.' });
         }
 
@@ -72,10 +83,16 @@ router.post('/register', async (req, res) => {
                 VALUES (?, ?, ?, 'user', ?, NULL, NOW(), NULL)
             `;
             db.query(insertQuery, [username, hashedPassword, email, username], (err) => {
-                if (err) return res.status(500).json({ message: 'Erro ao criar utilizador', error: err });
+                if (err) {
+                    logger.error(`[AUTH - REGISTER] Erro ao inserir utilizador na base de dados (${email}). MSG: ${err.message}`, { stack: err.stack });
+                    return res.status(500).json({ message: 'Erro ao criar utilizador', error: err });
+                }
+                
+                logger.info(`[AUTH - REGISTER] Sucesso: Novo utilizador criado. Username: ${username}, Email: ${email}`);
                 return res.status(201).json({ message: 'Utilizador criado com sucesso.' });
             });
         } catch (error) {
+            logger.error(`[AUTH - REGISTER] Erro no servidor (try/catch bloqueado) para ${email}: ${error.message}`, { stack: error.stack });
             return res.status(500).json({ message: 'Erro no servidor', error });
         }
     });
@@ -142,15 +159,22 @@ router.post('/register', async (req, res) => {
 router.post('/login', (req, res) => {
     const { email, password } = req.body;
 
+    logger.info(`[AUTH - LOGIN] Tentativa de login iniciada para: ${email}`);
+
     if (!email || !password) {
+        logger.warn(`[AUTH - LOGIN] Falha: Email ou password não fornecidos para ${email}`);
         return res.status(400).json({ message: 'Email e password são obrigatórios.' });
     }
 
     const query = 'SELECT id, username, email, password, type FROM user WHERE email = ?';
     db.query(query, [email], async (err, results) => {
-        if (err) return res.status(500).json({ message: 'Erro no servidor', error: err });
+        if (err) {
+            logger.error(`[AUTH - LOGIN] Erro na base de dados ao procurar utilizador ${email}. MSG: ${err.message}`, { stack: err.stack });
+            return res.status(500).json({ message: 'Erro no servidor', error: err });
+        }
 
         if (results.length === 0) {
+            logger.warn(`[AUTH - LOGIN] Falha: Utilizador não encontrado para o email: ${email}`);
             return res.status(404).json({ message: 'Utilizador não encontrado.' });
         }
 
@@ -158,6 +182,7 @@ router.post('/login', (req, res) => {
         const isPasswordCorrect = await bcrypt.compare(password, user.password);
 
         if (!isPasswordCorrect) {
+            logger.warn(`[AUTH - LOGIN] Falha: Password incorreta para o utilizador ID: ${user.id} (${email})`);
             return res.status(401).json({ message: 'Password incorreta.' });
         }
 
@@ -165,6 +190,8 @@ router.post('/login', (req, res) => {
             { id: user.id, email: user.email, username: user.username, type: user.type },
             process.env.APP_SECRET
         );
+
+        logger.info(`[AUTH - LOGIN] Sucesso: Utilizador autenticado. ID: ${user.id}, Username: ${user.username}, Tipo: ${user.type}`);
 
         return res.status(201).json({
             message: 'Login realizado com sucesso.',

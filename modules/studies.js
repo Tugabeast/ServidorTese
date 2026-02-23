@@ -2,6 +2,9 @@ const express = require('express');
 const router = express.Router();
 const db = require('../config/db');
 
+// IMPORTAR O LOGGER
+const { logger } = require('../utils/logger');
+
 /**
  * @openapi
  * /studies:
@@ -28,7 +31,10 @@ const db = require('../config/db');
 router.get('/', (req, res) => {
     const { username } = req.query;
 
+    logger.info(`[STUDIES - GET] Pedido para listar estudos do investigador: ${username || 'NÃO FORNECIDO'}`);
+
     if (!username) {
+        logger.warn(`[STUDIES - GET] Falha: Username não fornecido.`);
         return res.status(400).json({ message: 'Username não fornecido.' });
     }
 
@@ -41,7 +47,12 @@ router.get('/', (req, res) => {
         ORDER BY createdAt DESC
     `;
     db.query(query, [username], (err, results) => {
-        if (err) return res.status(500).json({ message: 'Erro ao obter estudos.', error: err });
+        if (err) {
+            logger.error(`[STUDIES - GET] Erro na BD ao obter estudos de ${username}. MSG: ${err.message}`, { stack: err.stack });
+            return res.status(500).json({ message: 'Erro ao obter estudos.', error: err });
+        }
+        
+        logger.debug(`[STUDIES - GET] Sucesso: ${results.length} estudos encontrados para o investigador ${username}.`);
         res.status(200).json(results);
     });
 });
@@ -82,15 +93,22 @@ router.get('/', (req, res) => {
 router.post('/', (req, res) => {
     const { name, obs, addedBy, minClassificationsPerPost, validationAgreementPercent } = req.body;
 
+    logger.info(`[STUDIES - POST] Pedido para criar o estudo '${name}' pelo investigador '${addedBy}'`);
+
     if (!name || !addedBy) {
+        logger.warn(`[STUDIES - POST] Falha: Campos obrigatórios em falta (name ou addedBy).`);
         return res.status(400).json({ message: 'Campos obrigatórios em falta.' });
     }
 
     const checkQuery = 'SELECT COUNT(*) AS count FROM study WHERE name = ?';
     db.query(checkQuery, [name], (err, result) => {
-        if (err) return res.status(500).json({ message: 'Erro ao verificar duplicação.' });
+        if (err) {
+            logger.error(`[STUDIES - POST] Erro na BD ao verificar duplicação do estudo '${name}'. MSG: ${err.message}`, { stack: err.stack });
+            return res.status(500).json({ message: 'Erro ao verificar duplicação.' });
+        }
 
         if (result[0].count > 0) {
+            logger.warn(`[STUDIES - POST] Falha: Tentativa de criar estudo com nome já existente ('${name}').`);
             return res.status(409).json({ message: 'Estudo já existe.' });
         }
 
@@ -99,7 +117,12 @@ router.post('/', (req, res) => {
             VALUES (?, ?, ?, NOW(), NOW(), ?, ?)
         `;
         db.query(insertQuery, [name, obs, addedBy, minClassificationsPerPost, validationAgreementPercent], (err) => {
-            if (err) return res.status(500).json({ message: 'Erro ao criar estudo.', error: err });
+            if (err) {
+                logger.error(`[STUDIES - POST] Erro na BD ao inserir o estudo '${name}'. MSG: ${err.message}`, { stack: err.stack });
+                return res.status(500).json({ message: 'Erro ao criar estudo.', error: err });
+            }
+            
+            logger.info(`[STUDIES - POST] Sucesso: Estudo '${name}' criado com sucesso por '${addedBy}'.`);
             res.status(201).json({ message: 'Estudo criado com sucesso.' });
         });
     });
@@ -146,12 +169,18 @@ router.put('/:studyId', (req, res) => {
     const { name, obs, updatedBy, finishedAt, minClassificationsPerPost, validationAgreementPercent } = req.body;
     const { studyId } = req.params;
 
+    logger.info(`[STUDIES - PUT] Pedido para atualizar Estudo ID: ${studyId} (Novo nome: '${name}') por '${updatedBy}'`);
+
     // Verificar duplicação (mas excluir o próprio estudo)
     const checkQuery = 'SELECT COUNT(*) AS count FROM study WHERE name = ? AND id != ?';
     db.query(checkQuery, [name, studyId], (err, result) => {
-        if (err) return res.status(500).json({ message: 'Erro ao verificar duplicação.' });
+        if (err) {
+            logger.error(`[STUDIES - PUT] Erro na BD ao verificar duplicação para Estudo ID: ${studyId}. MSG: ${err.message}`, { stack: err.stack });
+            return res.status(500).json({ message: 'Erro ao verificar duplicação.' });
+        }
 
         if (result[0].count > 0) {
+            logger.warn(`[STUDIES - PUT] Falha: Já existe outro estudo com o nome '${name}'. Conflito com ID: ${studyId}`);
             return res.status(409).json({ message: 'Já existe outro estudo com esse nome.' });
         }
 
@@ -171,11 +200,16 @@ router.put('/:studyId', (req, res) => {
         params.push(studyId);
 
         db.query(query, params, (err) => {
-            if (err) return res.status(500).json({ message: 'Erro ao atualizar estudo.', error: err });
+            if (err) {
+                logger.error(`[STUDIES - PUT] Erro na BD ao atualizar Estudo ID: ${studyId}. MSG: ${err.message}`, { stack: err.stack });
+                return res.status(500).json({ message: 'Erro ao atualizar estudo.', error: err });
+            }
+            logger.info(`[STUDIES - PUT] Sucesso: Estudo ID: ${studyId} atualizado com sucesso.`);
             res.status(200).json({ message: 'Estudo atualizado com sucesso.' });
         });
     });
 });
+
 
 /**
  * @openapi
@@ -201,22 +235,65 @@ router.put('/:studyId', (req, res) => {
 
 // 🔹 APAGAR ESTUDO
 router.delete('/:studyId', (req, res) => {
-    db.query('DELETE FROM study WHERE id = ?', [req.params.studyId], (err, result) => {
+    const { studyId } = req.params;
+
+    logger.info(`[STUDIES - DELETE] Pedido para apagar Estudo ID: ${studyId}`);
+
+    db.query('DELETE FROM study WHERE id = ?', [studyId], (err, result) => {
         if (err) {
+            logger.error(`[STUDIES - DELETE] Erro na BD ao apagar Estudo ID: ${studyId}. MSG: ${err.message}`, { stack: err.stack });
             return res.status(500).json({ message: 'Erro ao apagar estudo.', error: err });
         }
 
         if (result.affectedRows === 0) {
+            logger.warn(`[STUDIES - DELETE] Falha: Estudo ID: ${studyId} não encontrado.`);
             return res.status(404).json({ message: 'Estudo não encontrado.' });
         }
 
+        logger.info(`[STUDIES - DELETE] Sucesso: Estudo ID: ${studyId} apagado com sucesso.`);
         res.status(200).json({ message: 'Estudo apagado com sucesso.' });
     });
 });
 
-
+/**
+ * @openapi
+ * /studies/user:
+ *   get:
+ *     tags: [Studies]
+ *     summary: Listar estudos associados ao utilizador autenticado
+ *     description: |
+ *       Retorna todos os estudos aos quais o utilizador autenticado
+ *       está associado através da tabela user_study.
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Lista de estudos retornada com sucesso.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 type: object
+ *                 properties:
+ *                   id:
+ *                     type: integer
+ *                     example: 4
+ *                   name:
+ *                     type: string
+ *                     example: "Estudo Eleições 2026"
+ *                   obs:
+ *                     type: string
+ *                     example: "Análise de publicações políticas"
+ *       401:
+ *         description: Não autenticado (token inválido ou ausente).
+ *       500:
+ *         description: Erro ao obter estudos do utilizador.
+ */
 router.get('/user', (req, res) => {
-    const userId = req.user.id; // Assume que o middleware de auth popula req.user
+    const userId = req.user.id; 
+
+    logger.info(`[STUDIES - GET USER] Pedido para listar estudos associados ao UserID: ${userId}`);
 
     // JOIN entre study e user_study para saber quais os estudos deste user específico
     const query = `
@@ -229,12 +306,14 @@ router.get('/user', (req, res) => {
 
     db.query(query, [userId], (err, results) => {
         if (err) {
-            console.error('Erro ao buscar estudos do participante:', err);
+            logger.error(`[STUDIES - GET USER] Erro na BD ao buscar estudos do participante UserID: ${userId}. MSG: ${err.message}`, { stack: err.stack });
             return res.status(500).json({ 
                 message: 'Erro ao obter estudos do utilizador.', 
                 error: err 
             });
         }
+        
+        logger.debug(`[STUDIES - GET USER] Sucesso: Encontrados ${results.length} estudos para o UserID: ${userId}`);
         res.status(200).json(results);
     });
 });

@@ -3,6 +3,9 @@ const router = express.Router();
 const db = require('../config/db');
 const axios = require('axios');
 
+// IMPORTAR O LOGGER
+const { logger } = require('../utils/logger');
+
 /**
  * @openapi
  * /posts:
@@ -202,12 +205,12 @@ router.get('/', async (req, res) => {
 
 router.get('/investigador', (req, res) => {
     const userId = req.user?.id;
+    const username = req.user?.username;
 
-    console.log('➡️ Requisição para /posts recebida');
-    console.log('🔐 Utilizador autenticado:', req.user);
+    logger.info(`[POSTS - INVESTIGADOR] Pedido de publicações para o investigador: ${username} (ID: ${userId})`);
 
     if (!userId) {
-        console.error('❌ req.user.id está undefined');
+        logger.warn(`[POSTS - INVESTIGADOR] Falha: Token sem user.id`);
         return res.status(401).json({ message: 'Token inválido ou utilizador não autenticado.' });
     }
 
@@ -220,42 +223,35 @@ router.get('/investigador', (req, res) => {
         WHERE s.addedBy = ?
     `;
 
-
     const imagesQuery = `
         SELECT i.postId, i.image_data, i.isFrontPage
         FROM image i
         WHERE i.postId IN (?);
     `;
 
-    console.log('📥 Executando query de posts...');
-    db.query(query, [req.user.username], (err, postsResults) => {
+    db.query(query, [username], (err, postsResults) => {
         if (err) {
-            console.error('❌ Erro ao buscar posts:', err);
+            logger.error(`[POSTS - INVESTIGADOR] Erro ao buscar publicações para o utilizador ${username}. MSG: ${err.message}`, { stack: err.stack });
             return res.status(500).json({ message: 'Erro ao buscar posts.', error: err });
         }
 
-        console.log('✅ Posts encontrados:', postsResults.length);
-
         const postIds = postsResults.map(post => post.id);
+        
         if (postIds.length === 0) {
-            console.log('⚠️ Nenhum post encontrado para os estudos do utilizador.');
+            logger.info(`[POSTS - INVESTIGADOR] Nenhum post encontrado para o investigador ${username}.`);
             return res.json({ posts: [] });
         }
 
-        console.log('🔎 IDs dos posts encontrados:', postIds);
-
         db.query(imagesQuery, [postIds], (err, imagesResults) => {
             if (err) {
-                console.error('❌ Erro ao buscar imagens:', err);
+                logger.error(`[POSTS - INVESTIGADOR] Erro ao buscar imagens para os posts do investigador ${username}. MSG: ${err.message}`, { stack: err.stack });
                 return res.status(500).json({ message: 'Erro ao buscar imagens.', error: err });
             }
-
-            console.log('🖼️ Imagens retornadas do banco:', imagesResults.length);
 
             const imagesByPostId = {};
             imagesResults.forEach(img => {
                 if (!img.image_data) {
-                    console.warn(`⚠️ Imagem nula ignorada para o postId: ${img.postId}`);
+                    logger.warn(`[POSTS - INVESTIGADOR] Imagem nula detetada e ignorada para o postId: ${img.postId}`);
                     return;
                 }
 
@@ -280,7 +276,7 @@ router.get('/investigador', (req, res) => {
                 images: imagesByPostId[post.id] || []
             }));
 
-            console.log('📤 Enviando posts ao frontend...');
+            logger.info(`[POSTS - INVESTIGADOR] Sucesso: Enviadas ${posts.length} publicações para o investigador ${username}.`);
             res.status(200).json({ posts });
         });
     });
@@ -309,14 +305,24 @@ router.get('/investigador', (req, res) => {
 // DETALHES DE UM POST
 router.get('/:id', (req, res) => {
     const { id } = req.params;
+    
+    logger.info(`[POSTS - GET BY ID] Pedido de detalhes para o post ID: ${id}`);
+
     db.query('SELECT * FROM post WHERE id = ?', [id], (err, results) => {
         if (err) {
-            console.error('❌ Erro ao buscar post por ID:', err);
+            logger.error(`[POSTS - GET BY ID] Erro na BD ao procurar post ID: ${id}. MSG: ${err.message}`, { stack: err.stack });
             return res.status(500).json({ message: 'Erro ao procurar post.', error: err });
         }
+        
+        if(results.length === 0) {
+            logger.warn(`[POSTS - GET BY ID] Post ID: ${id} não encontrado.`);
+            return res.status(404).json({ message: 'Post não encontrado.' });
+        }
+
         res.json(results[0]);
     });
 });
+
 
 /**
  * @openapi
@@ -369,10 +375,17 @@ router.get('/:id', (req, res) => {
 // IMPORTAR JSON DE POSTS
 router.post('/', async (req, res) => {
     const { posts, studyId } = req.body;
+    const userId = req.user?.id; // Assumindo que tens middleware de autenticação aqui também
+
+    logger.info(`[POSTS - IMPORT] Início da importação de publicações para o Estudo ID: ${studyId}. Solicitado por UserID: ${userId}`);
 
     if (!Array.isArray(posts) || !studyId) {
+        logger.warn(`[POSTS - IMPORT] Falha: Formato inválido ou studyId em falta. UserID: ${userId}`);
         return res.status(400).json({ message: 'Formato de dados inválido ou studyId em falta.' });
     }
+
+    let sucessCount = 0;
+    let errorCount = 0;
 
     for (const post of posts) {
         const { user, url, username, id, text, likes, replies, retweets, images = [] } = post;
@@ -394,6 +407,7 @@ router.post('/', async (req, res) => {
             ]);
 
             const postId = insertResult.insertId;
+            sucessCount++;
 
             for (let i = 0; i < images.length; i++) {
                 try {
@@ -407,16 +421,22 @@ router.post('/', async (req, res) => {
                     `, [imageData, isFrontPage, postId]);
 
                 } catch (imgErr) {
-                    console.warn(`⚠️ Erro ao importar imagem ${images[i]}:`, imgErr);
+                    logger.warn(`[POSTS - IMPORT] Erro ao importar imagem da URL: ${images[i]} para o Post ID local: ${postId}. MSG: ${imgErr.message}`);
                 }
             }
         } catch (err) {
-            console.error('❌ Erro ao importar post:', err);
-            return res.status(500).json({ message: 'Erro ao importar post.', error: err });
+            errorCount++;
+            logger.error(`[POSTS - IMPORT] Erro ao inserir post do Twitter (Original ID: ${id}) no Estudo ID: ${studyId}. MSG: ${err.message}`, { stack: err.stack });
         }
     }
 
-    res.status(201).json({ message: 'Importação concluída com sucesso.' });
+    logger.info(`[POSTS - IMPORT] Importação concluída. Estudo ID: ${studyId}. Sucesso: ${sucessCount} | Falhas: ${errorCount}`);
+    
+    if (errorCount > 0 && sucessCount === 0) {
+        return res.status(500).json({ message: 'Erro ao importar todas as publicações.' });
+    }
+    
+    res.status(201).json({ message: `Importação concluída. ${sucessCount} publicações inseridas.` });
 });
 
 
@@ -426,7 +446,10 @@ router.get('/', async (req, res) => {
     const selectedStudyId = req.query.studyId;
     const showHistory = req.query.includeClassified === 'true'; 
 
+    logger.info(`[POSTS - FEED] Pedido recebido. UserID: ${userId} | Estudo ID alvo: ${selectedStudyId || 'Nenhum'} | Modo Histórico: ${showHistory}`);
+
     if (!userId) {
+        logger.warn(`[POSTS - FEED] Falha: Token inválido ou em falta.`);
         return res.status(401).json({ message: 'Token inválido.' });
     }
 
@@ -437,7 +460,10 @@ router.get('/', async (req, res) => {
         );
         const allowedStudyIds = studyRows.map(row => row.studyId);
 
-        if (allowedStudyIds.length === 0) return res.json({ posts: [] });
+        if (allowedStudyIds.length === 0) {
+            logger.info(`[POSTS - FEED] Utilizador (ID: ${userId}) sem estudos associados.`);
+            return res.json({ posts: [] });
+        }
 
         let targetStudyId = allowedStudyIds[0];
         if (selectedStudyId && selectedStudyId !== 'undefined' && selectedStudyId !== '') {
@@ -445,6 +471,7 @@ router.get('/', async (req, res) => {
             if (allowedStudyIds.includes(idToCheck)) {
                 targetStudyId = idToCheck;
             } else {
+                logger.warn(`[POSTS - FEED] Tentativa de acesso a estudo não permitido (Estudo: ${idToCheck}, UserID: ${userId})`);
                 return res.status(403).json({ message: 'Sem permissão.' });
             }
         }
@@ -455,7 +482,8 @@ router.get('/', async (req, res) => {
         
         if (showHistory) {
             // === MODO HISTÓRICO ===
-            // Sem Random. Ordenado por antiguidade (data da classificação)
+            logger.debug(`[POSTS - FEED] A executar query de histórico para o UserID: ${userId} (Estudo ID: ${targetStudyId})`);
+            
             const historyQuery = `
                 SELECT DISTINCT p.*, s.name AS studyName
                 FROM post p
@@ -468,12 +496,14 @@ router.get('/', async (req, res) => {
             [posts] = await db.promise().query(historyQuery, [targetStudyId, userId]);
             
             if (posts.length === 0) {
+                logger.info(`[POSTS - FEED] Modo Histórico: Sem publicações para apresentar (UserID: ${userId})`);
                 return res.json({ posts: [], message: 'Ainda não classificaste nenhum post neste estudo.' });
             }
 
         } else {
+            // === MODO "PRÓXIMO POST" LOTE RANDOMIZADO ===
+            logger.debug(`[POSTS - FEED] A validar limites para o UserID: ${userId} (Estudo ID: ${targetStudyId})`);
             
-            // 1. Verificar Limite e Calcular quantos posts enviar
             const checkLimitQuery = `
                 SELECT s.maxClassificationsPerUser,
                 (SELECT COUNT(DISTINCT c.postId) FROM classification c 
@@ -483,29 +513,28 @@ router.get('/', async (req, res) => {
             `;
             const [limitResult] = await db.promise().query(checkLimitQuery, [userId, targetStudyId]);
 
-            let limitToFetch = 10; // Tamanho do bloco base (podes mudar para 20 se preferires)
+            let limitToFetch = 10;
 
             if (limitResult.length > 0) {
                 const { maxClassificationsPerUser, total_posts_done } = limitResult[0];
                 
-                // Se existe um limite configurado no Estudo
                 if (maxClassificationsPerUser !== null) {
                     const remaining = maxClassificationsPerUser - total_posts_done;
                     
                     if (remaining <= 0) {
+                        logger.info(`[POSTS - FEED] Limite atingido para o UserID: ${userId} no Estudo ID: ${targetStudyId}`);
                         return res.json({ 
                             posts: [], 
                             message: 'Parabéns! Já atingiste o limite de classificações para este estudo.' 
                         });
                     }
                     
-                    // Garante que só mandamos o número de posts exato que ele precisa para acabar
-                    // Se faltarem 2, envia 2. Se faltarem 50, envia o bloco de 10.
                     limitToFetch = Math.min(10, remaining); 
                 }
             }
 
-            // 2. Buscar Lote de Posts Aleatório
+            logger.debug(`[POSTS - FEED] A buscar lote randomizado (Limite: ${limitToFetch}) para o UserID: ${userId}`);
+
             const getNextPostQuery = `
                 SELECT p.*, s.name AS studyName, s.minClassificationsPerPost
                 FROM post p
@@ -523,15 +552,17 @@ router.get('/', async (req, res) => {
                 LIMIT ?
             `;
             
-            // Passamos o `limitToFetch` de forma dinâmica
             [posts] = await db.promise().query(getNextPostQuery, [targetStudyId, userId, limitToFetch]);
 
             if (posts.length === 0) {
+                logger.info(`[POSTS - FEED] Nenhum post novo disponível para classificação (UserID: ${userId})`);
                 return res.json({ posts: [], message: 'Não existem mais posts disponíveis neste momento.' });
             }
         }
 
         // --- CARREGAMENTO DE DADOS EXTRAS ---
+        logger.debug(`[POSTS - FEED] A carregar imagens e perguntas associadas para ${posts.length} posts.`);
+        
         const postIds = posts.map(p => p.id);
 
         const [images] = await db.promise().query(
@@ -584,10 +615,11 @@ router.get('/', async (req, res) => {
             };
         });
 
+        logger.info(`[POSTS - FEED] Sucesso: Dados compilados e enviados ao UserID: ${userId} (${posts.length} posts carregados)`);
         res.status(200).json({ posts: postsWithData });
 
     } catch (err) {
-        console.error('❌ Erro na rota /posts:', err);
+        logger.error(`[POSTS - FEED] Erro crítico na rota principal de publicações. MSG: ${err.message}`, { stack: err.stack });
         res.status(500).json({ message: 'Erro ao receber posts.', error: err });
     }
 });

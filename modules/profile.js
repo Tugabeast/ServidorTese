@@ -3,6 +3,8 @@ const router = express.Router();
 const bcrypt = require('bcrypt');
 const db = require('../config/db');
 
+const { logger } = require('../utils/logger');
+
 /**
  * @openapi
  * /profile:
@@ -41,16 +43,20 @@ const db = require('../config/db');
 router.put('/', async (req, res) => {
     const { currentUsername, newUsername, currentPassword, newPassword } = req.body;
 
+    logger.info(`[PROFILE - PUT] Início de atualização de perfil para o utilizador: ${currentUsername || 'DESCONHECIDO'}`);
+
     if (!currentUsername || (!newUsername && !newPassword)) {
+        logger.warn(`[PROFILE - PUT] Falha: Campos obrigatórios em falta (currentUsername: ${currentUsername})`);
         return res.status(400).json({ message: 'Campos obrigatórios em falta.' });
     }
 
     try {
-        // 1. Procurar o utilizador atual (Agora com await/promise)
+        // 1. Procurar o utilizador atual
         const query = 'SELECT * FROM user WHERE username = ?';
         const [results] = await db.promise().query(query, [currentUsername]);
 
         if (results.length === 0) {
+            logger.warn(`[PROFILE - PUT] Falha: Utilizador '${currentUsername}' não encontrado na BD.`);
             return res.status(404).json({ message: 'Utilizador não encontrado.' });
         }
 
@@ -62,6 +68,7 @@ router.put('/', async (req, res) => {
             const [usernameCheck] = await db.promise().query(usernameCheckQuery, [newUsername]);
             
             if (usernameCheck.length > 0) {
+                logger.warn(`[PROFILE - PUT] Falha: Tentativa de alteração para username já existente ('${newUsername}') pelo user '${currentUsername}'.`);
                 return res.status(409).json({ message: 'Username já existe.' });
             }
         }
@@ -69,10 +76,12 @@ router.put('/', async (req, res) => {
         // 3. Verifica password (se foi enviada nova password)
         if (newPassword) {
             if (!currentPassword) {
+                 logger.warn(`[PROFILE - PUT] Falha: Utilizador '${currentUsername}' tentou alterar a password sem fornecer a password atual.`);
                  return res.status(400).json({ message: 'Para alterar a senha, é necessário fornecer a senha atual.' });
             }
             const passwordMatches = await bcrypt.compare(currentPassword, user.password);
             if (!passwordMatches) {
+                logger.warn(`[PROFILE - PUT] Falha: Password atual incorreta para o utilizador '${currentUsername}'.`);
                 return res.status(400).json({ message: 'Password atual incorreta.' });
             }
         }
@@ -80,16 +89,19 @@ router.put('/', async (req, res) => {
         // 4. Preparar a query de atualização
         let queryUpdate = 'UPDATE user SET ';
         const params = [];
+        let logDetails = []; // Array apenas para formar uma string amigável no log
 
         if (newUsername) {
             queryUpdate += 'username = ?, ';
             params.push(newUsername);
+            logDetails.push(`Username alterado de '${currentUsername}' para '${newUsername}'`);
         }
 
         if (newPassword) {
             const hashedPassword = await bcrypt.hash(newPassword, 10);
             queryUpdate += 'password = ?, ';
             params.push(hashedPassword);
+            logDetails.push('Password alterada');
         }
 
         // Adiciona timestamp e fecha a query
@@ -102,10 +114,11 @@ router.put('/', async (req, res) => {
         // 5. Executar atualização
         await db.promise().query(queryUpdate, params);
 
+        logger.info(`[PROFILE - PUT] Sucesso: Perfil de '${currentUsername}' atualizado. Alterações: ${logDetails.join(' | ')}`);
         res.status(200).json({ message: 'Perfil atualizado com sucesso.' });
 
     } catch (err) {
-        console.error('❌ Erro ao atualizar perfil:', err);
+        logger.error(`[PROFILE - PUT] Erro crítico ao atualizar perfil de '${currentUsername}'. MSG: ${err.message}`, { stack: err.stack });
         res.status(500).json({ message: 'Erro ao atualizar perfil.', error: err });
     }
 });
