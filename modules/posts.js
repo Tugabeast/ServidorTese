@@ -485,12 +485,13 @@ router.get('/', async (req, res) => {
             logger.debug(`[POSTS - FEED] A executar query de histórico para o UserID: ${userId} (Estudo ID: ${targetStudyId})`);
             
             const historyQuery = `
-                SELECT DISTINCT p.*, s.name AS studyName
+                SELECT DISTINCT p.*, s.name AS studyName, max(c.createdAt)
                 FROM post p
                 JOIN study s ON p.studyId = s.id
                 JOIN classification c ON c.postId = p.id
                 WHERE p.studyId = ? 
                 AND c.userId = ?
+                GROUP BY p.id
                 ORDER BY c.createdAt DESC
             `;
             [posts] = await db.promise().query(historyQuery, [targetStudyId, userId]);
