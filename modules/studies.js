@@ -41,7 +41,7 @@ router.get('/', (req, res) => {
     const query = `
         SELECT 
             id, name, obs, addedBy, startedAt, updatedBy, finishedAt,
-            createdAt, updatedAt, minClassificationsPerPost, validationAgreementPercent
+            createdAt, updatedAt, minClassificationsPerPost, maxClassificationsPerUser , validationAgreementPercent
         FROM study
         WHERE addedBy = ?
         ORDER BY createdAt DESC
@@ -91,7 +91,7 @@ router.get('/', (req, res) => {
 
 // 🔹 CRIAR ESTUDO
 router.post('/', (req, res) => {
-    const { name, obs, addedBy, minClassificationsPerPost, validationAgreementPercent } = req.body;
+    const { name, obs, addedBy, minClassificationsPerPost, maxClassificationsPerUser,validationAgreementPercent } = req.body;
 
     logger.info(`[STUDIES - POST] Pedido para criar o estudo '${name}' pelo investigador '${addedBy}'`);
 
@@ -113,10 +113,10 @@ router.post('/', (req, res) => {
         }
 
         const insertQuery = `
-            INSERT INTO study (name, obs, addedBy, startedAt, createdAt, minClassificationsPerPost, validationAgreementPercent)
-            VALUES (?, ?, ?, NOW(), NOW(), ?, ?)
+            INSERT INTO study (name, obs, addedBy, startedAt, createdAt, minClassificationsPerPost, maxClassificationsPerUser, validationAgreementPercent)
+            VALUES (?, ?, ?, NOW(), NOW(), ?, ? , ?)
         `;
-        db.query(insertQuery, [name, obs, addedBy, minClassificationsPerPost, validationAgreementPercent], (err) => {
+        db.query(insertQuery, [name, obs, addedBy, minClassificationsPerPost,maxClassificationsPerUser, validationAgreementPercent], (err) => {
             if (err) {
                 logger.error(`[STUDIES - POST] Erro na BD ao inserir o estudo '${name}'. MSG: ${err.message}`, { stack: err.stack });
                 return res.status(500).json({ message: 'Erro ao criar estudo.', error: err });
@@ -166,7 +166,7 @@ router.post('/', (req, res) => {
 
 // 🔹 ATUALIZAR ESTUDO
 router.put('/:studyId', (req, res) => {
-    const { name, obs, updatedBy, finishedAt, minClassificationsPerPost, validationAgreementPercent } = req.body;
+    const { name, obs, updatedBy, finishedAt, minClassificationsPerPost, maxClassificationsPerUser, validationAgreementPercent } = req.body;
     const { studyId } = req.params;
 
     logger.info(`[STUDIES - PUT] Pedido para atualizar Estudo ID: ${studyId} (Novo nome: '${name}') por '${updatedBy}'`);
@@ -187,9 +187,9 @@ router.put('/:studyId', (req, res) => {
         let query = `
             UPDATE study SET 
                 name = ?, obs = ?, updatedBy = ?, updatedAt = NOW(),
-                minClassificationsPerPost = ?, validationAgreementPercent = ?
+                minClassificationsPerPost = ?, maxClassificationsPerUser = ?,validationAgreementPercent = ?
         `;
-        const params = [name, obs, updatedBy, minClassificationsPerPost, validationAgreementPercent];
+        const params = [name, obs, updatedBy, minClassificationsPerPost, maxClassificationsPerUser, validationAgreementPercent];
 
         if (finishedAt) {
             query += ', finishedAt = ?';
