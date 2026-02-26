@@ -166,34 +166,39 @@ router.post('/', (req, res) => {
 
 // 🔹 ATUALIZAR ESTUDO
 router.put('/:studyId', (req, res) => {
-    const { name, obs, updatedBy, finishedAt, minClassificationsPerPost, maxClassificationsPerUser, validationAgreementPercent } = req.body;
+    let { name, obs, updatedBy, finishedAt, minClassificationsPerPost, maxClassificationsPerUser, validationAgreementPercent } = req.body;
     const { studyId } = req.params;
 
     logger.info(`[STUDIES - PUT] Pedido para atualizar Estudo ID: ${studyId} (Novo nome: '${name}') por '${updatedBy}'`);
 
-    // Verificar duplicação (mas excluir o próprio estudo)
+    // VALIDAÇÃO DE SEGURANÇA (Se o frontend mandar string vazia nos números, converte para null ou 0)
+    minClassificationsPerPost = minClassificationsPerPost === '' ? null : minClassificationsPerPost;
+    maxClassificationsPerUser = maxClassificationsPerUser === '' ? null : maxClassificationsPerUser;
+    validationAgreementPercent = validationAgreementPercent === '' ? null : validationAgreementPercent;
+
     const checkQuery = 'SELECT COUNT(*) AS count FROM study WHERE name = ? AND id != ?';
     db.query(checkQuery, [name, studyId], (err, result) => {
         if (err) {
-            logger.error(`[STUDIES - PUT] Erro na BD ao verificar duplicação para Estudo ID: ${studyId}. MSG: ${err.message}`, { stack: err.stack });
+            logger.error(`[STUDIES - PUT] Erro na BD ao verificar duplicação. MSG: ${err.message}`, { stack: err.stack });
             return res.status(500).json({ message: 'Erro ao verificar duplicação.' });
         }
 
         if (result[0].count > 0) {
-            logger.warn(`[STUDIES - PUT] Falha: Já existe outro estudo com o nome '${name}'. Conflito com ID: ${studyId}`);
+            logger.warn(`[STUDIES - PUT] Falha: Já existe outro estudo com o nome '${name}'.`);
             return res.status(409).json({ message: 'Já existe outro estudo com esse nome.' });
         }
 
         let query = `
             UPDATE study SET 
                 name = ?, obs = ?, updatedBy = ?, updatedAt = NOW(),
-                minClassificationsPerPost = ?, maxClassificationsPerUser = ?,validationAgreementPercent = ?
+                minClassificationsPerPost = ?, maxClassificationsPerUser = ?, validationAgreementPercent = ?
         `;
         const params = [name, obs, updatedBy, minClassificationsPerPost, maxClassificationsPerUser, validationAgreementPercent];
 
-        if (finishedAt) {
+        // Se finishedAt vier definido (mesmo sendo vazio), atualiza
+        if (finishedAt !== undefined) {
             query += ', finishedAt = ?';
-            params.push(finishedAt);
+            params.push(finishedAt === '' ? null : finishedAt); // Se estiver vazio, guarda NULL (Limpa a data)
         }
 
         query += ' WHERE id = ?';
@@ -204,7 +209,7 @@ router.put('/:studyId', (req, res) => {
                 logger.error(`[STUDIES - PUT] Erro na BD ao atualizar Estudo ID: ${studyId}. MSG: ${err.message}`, { stack: err.stack });
                 return res.status(500).json({ message: 'Erro ao atualizar estudo.', error: err });
             }
-            logger.info(`[STUDIES - PUT] Sucesso: Estudo ID: ${studyId} atualizado com sucesso.`);
+            logger.info(`[STUDIES - PUT] Sucesso: Estudo ID: ${studyId} atualizado.`);
             res.status(200).json({ message: 'Estudo atualizado com sucesso.' });
         });
     });
