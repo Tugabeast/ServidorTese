@@ -171,10 +171,17 @@ router.put('/:studyId', (req, res) => {
 
     logger.info(`[STUDIES - PUT] Pedido para atualizar Estudo ID: ${studyId} (Novo nome: '${name}') por '${updatedBy}'`);
 
-    // VALIDAÇÃO DE SEGURANÇA (Se o frontend mandar string vazia nos números, converte para null ou 0)
+    //Se o frontend mandar string vazia, converte para null
     minClassificationsPerPost = minClassificationsPerPost === '' ? null : minClassificationsPerPost;
     maxClassificationsPerUser = maxClassificationsPerUser === '' ? null : maxClassificationsPerUser;
     validationAgreementPercent = validationAgreementPercent === '' ? null : validationAgreementPercent;
+
+    let finalFinishedAt;
+    if (finishedAt === undefined || finishedAt === null || String(finishedAt).trim() === '') {
+        finalFinishedAt = null;
+    } else {
+        finalFinishedAt = finishedAt;
+    }
 
     const checkQuery = 'SELECT COUNT(*) AS count FROM study WHERE name = ? AND id != ?';
     db.query(checkQuery, [name, studyId], (err, result) => {
@@ -188,21 +195,30 @@ router.put('/:studyId', (req, res) => {
             return res.status(409).json({ message: 'Já existe outro estudo com esse nome.' });
         }
 
+        // A query agora obriga o finishedAt a ser atualizado sempre (mesmo para o limpar com NULL)
         let query = `
             UPDATE study SET 
-                name = ?, obs = ?, updatedBy = ?, updatedAt = NOW(),
-                minClassificationsPerPost = ?, maxClassificationsPerUser = ?, validationAgreementPercent = ?
+                name = ?, 
+                obs = ?, 
+                updatedBy = ?, 
+                updatedAt = NOW(),
+                minClassificationsPerPost = ?, 
+                maxClassificationsPerUser = ?, 
+                validationAgreementPercent = ?,
+                finishedAt = ?
+            WHERE id = ?
         `;
-        const params = [name, obs, updatedBy, minClassificationsPerPost, maxClassificationsPerUser, validationAgreementPercent];
-
-        // Se finishedAt vier definido (mesmo sendo vazio), atualiza
-        if (finishedAt !== undefined) {
-            query += ', finishedAt = ?';
-            params.push(finishedAt === '' ? null : finishedAt); // Se estiver vazio, guarda NULL (Limpa a data)
-        }
-
-        query += ' WHERE id = ?';
-        params.push(studyId);
+        
+        const params = [
+            name, 
+            obs, 
+            updatedBy, 
+            minClassificationsPerPost, 
+            maxClassificationsPerUser, 
+            validationAgreementPercent,
+            finalFinishedAt,
+            studyId
+        ];
 
         db.query(query, params, (err) => {
             if (err) {
