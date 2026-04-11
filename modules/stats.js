@@ -293,7 +293,7 @@ router.get('/general', (req, res) => {
  * @openapi
  * /stats/timeline:
  *   get:
- *     tags: [Statistics]
+ *     tags: [Stats]
  *     summary: Obter timeline de atividade do utilizador autenticado
  *     description: |
  *       Retorna o número de classificações feitas pelo utilizador autenticado,
