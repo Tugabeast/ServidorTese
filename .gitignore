@@ -1,4 +1,6 @@
 node_modules/
 .env
 package-lock.json
-
+# Ignore all files ending in .log and on log folder
+*.log
+log/
