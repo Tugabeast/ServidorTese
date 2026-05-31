@@ -49,6 +49,7 @@ const TYPE_RE = /^[a-z][a-z_-]{1,29}$/; // 2–30 chars, sem dígitos
  *                   questionId:   { type: integer }
  *                   questionName: { type: string }
  *       400: { description: Nome de utilizador não fornecido. }
+ *       404: { description: Nenhuma categoria encontrada para este investigador. }
  *       500: { description: Erro ao procurar categorias. }
  */
 // LISTAR TODAS AS CATEGORIAS
@@ -73,9 +74,15 @@ router.get('/', (req, res) => {
 
   db.query(query, [username], (err, results) => {
     if (err) {
-        logger.error(`[CATEGORIES - GET] Erro na DB ao procurar categorias para ${username}. MSG: ${err.message}`, { stack: err.stack });
-        return res.status(500).json({ message: 'Erro ao procurar categorias.', error: err });
+      logger.error(`[CATEGORIES - GET] Erro na DB ao procurar categorias para ${username}. MSG: ${err.message}`, { stack: err.stack });
+      return res.status(500).json({ message: 'Erro ao procurar categorias.', error: err });
     }
+
+    if (results.length === 0) {
+      logger.warn(`[CATEGORIES - GET] Nenhuma categoria encontrada para o investigador: ${username}`);
+      return res.status(404).json({ message: 'Nenhuma categoria encontrada para este investigador.' });
+    }
+
     logger.info(`[CATEGORIES - GET] Sucesso: ${results.length} categorias encontradas para ${username}.`);
     res.status(200).json(results);
   });
@@ -86,7 +93,7 @@ router.get('/', (req, res) => {
  * /categories/types:
  *   get:
  *     tags: [Categories]
- *     summary: Listar tipos de categoria (sugestões)
+ *     summary: Listar tipos de categoria
  *     description: Devolve a lista distinta de `categoryType` já existentes. Quando `username` é fornecido, devolve apenas os tipos pertencentes ao investigador.
  *     security:
  *       - bearerAuth: []
@@ -99,12 +106,13 @@ router.get('/', (req, res) => {
  *         description: Nome de utilizador do investigador para filtrar as sugestões.
  *     responses:
  *       200:
- *         description: Lista de tipos (strings).
+ *         description: Lista de tipos de categoria obtida com sucesso.
  *         content:
  *           application/json:
  *             schema:
  *               type: array
  *               items: { type: string, example: tematicas }
+ *       404: { description: Nenhum tipo de categoria encontrado. }
  *       500: { description: Erro ao obter tipos. }
  */
 // SUGESTÕES DE TIPOS
@@ -115,12 +123,13 @@ router.get('/types', (req, res) => {
 
   let sql;
   let params = [];
+
   if (username) {
     sql = `
       SELECT DISTINCT c.categoryType
       FROM categories c
       JOIN question q ON q.id = c.questionId
-      JOIN study   s ON s.id = q.studyId
+      JOIN study s ON s.id = q.studyId
       WHERE s.addedBy = ?
         AND c.categoryType IS NOT NULL
         AND c.categoryType <> ''
@@ -139,10 +148,19 @@ router.get('/types', (req, res) => {
 
   db.query(sql, params, (err, rows) => {
     if (err) {
-        logger.error(`[CATEGORIES - TYPES] Erro na DB ao obter tipos. MSG: ${err.message}`, { stack: err.stack });
-        return res.status(500).json({ message: 'Erro ao obter tipos.', error: err });
+      logger.error(`[CATEGORIES - TYPES] Erro na DB ao obter tipos. MSG: ${err.message}`, { stack: err.stack });
+      return res.status(500).json({ message: 'Erro ao obter tipos.', error: err });
     }
-    res.json((rows || []).map(r => r.categoryType));
+
+    const types = (rows || []).map(r => r.categoryType);
+
+    if (types.length === 0) {
+      logger.warn(`[CATEGORIES - TYPES] Nenhum tipo de categoria encontrado.`);
+      return res.status(404).json({ message: 'Nenhum tipo de categoria encontrado.' });
+    }
+
+    logger.info(`[CATEGORIES - TYPES] Sucesso: ${types.length} tipos de categoria encontrados.`);
+    res.status(200).json(types);
   });
 });
 
@@ -164,11 +182,12 @@ router.get('/types', (req, res) => {
  *             required: [name, categoryType, questionId]
  *             properties:
  *               name:         { type: string,  example: "Fake News" }
- *               categoryType: { type: string,  example: "temáticas" }
+ *               categoryType: { type: string,  example: "tematicas" }
  *               questionId:   { type: integer, example: 5 }
  *     responses:
  *       201: { description: Categoria criada com sucesso. }
  *       400: { description: Campos obrigatórios em falta / Tipo inválido. }
+ *       404: { description: Pergunta não encontrada. }
  *       409: { description: Categoria já existe. }
  *       500: { description: Erro ao criar categoria. }
  */
@@ -198,7 +217,7 @@ router.post('/', (req, res) => {
     }
     if (!rows.length) {
         logger.warn(`[CATEGORIES - POST] Falha: Pergunta ID ${questionId} não existe.`);
-        return res.status(400).json({ message: 'Pergunta inválida.' });
+        return res.status(404).json({ message: 'Pergunta não encontrada.' });
     }
 
     const studyId = rows[0].studyId;
@@ -265,11 +284,10 @@ router.post('/', (req, res) => {
  *     responses:
  *       200: { description: Categoria atualizada com sucesso. }
  *       400: { description: Campos obrigatórios em falta / Tipo inválido. }
- *       404: { description: Categoria não encontrada. }
+ *       404: { description: Categoria ou pergunta não encontrada. }
  *       409: { description: Duplicado no estudo. }
  *       500: { description: Erro ao atualizar categoria. }
  */
-// ATUALIZAR CATEGORIA
 router.put('/:categoryId', (req, res) => {
   const { name, categoryType, questionId } = req.body;
   const { categoryId } = req.params;
@@ -282,60 +300,64 @@ router.put('/:categoryId', (req, res) => {
   }
 
   const normalizedType = toSlug(categoryType);
+
   if (!normalizedType || !TYPE_RE.test(normalizedType)) {
     logger.warn(`[CATEGORIES - PUT] Falha: Tipo de categoria inválido ('${categoryType}') no ID: ${categoryId}`);
     return res.status(400).json({ message: 'Tipo de categoria inválido.' });
   }
 
-  // 1) obter o studyId a partir da pergunta escolhida
   const qStudy = 'SELECT studyId FROM question WHERE id = ?';
+
   db.query(qStudy, [questionId], (err, rows) => {
     if (err) {
-        logger.error(`[CATEGORIES - PUT] Erro na DB ao verificar pergunta ID: ${questionId}. MSG: ${err.message}`, { stack: err.stack });
-        return res.status(500).json({ message: 'Erro ao verificar pergunta.', error: err });
+      logger.error(`[CATEGORIES - PUT] Erro na DB ao verificar pergunta ID: ${questionId}. MSG: ${err.message}`, { stack: err.stack });
+      return res.status(500).json({ message: 'Erro ao verificar pergunta.', error: err });
     }
+
     if (!rows.length) {
-        logger.warn(`[CATEGORIES - PUT] Falha: Pergunta ID ${questionId} não existe.`);
-        return res.status(400).json({ message: 'Pergunta inválida.' });
+      logger.warn(`[CATEGORIES - PUT] Falha: Pergunta ID ${questionId} não existe.`);
+      return res.status(404).json({ message: 'Pergunta não encontrada.' });
     }
 
     const studyId = rows[0].studyId;
 
-    // 2) duplicado por estudo, ignorando o próprio id
     const dup = `
       SELECT COUNT(*) AS cnt
       FROM categories c
       JOIN question q ON q.id = c.questionId
       WHERE c.name = ? AND q.studyId = ? AND c.id <> ?
     `;
+
     db.query(dup, [name, studyId, categoryId], (err2, r2) => {
       if (err2) {
-          logger.error(`[CATEGORIES - PUT] Erro na DB ao verificar duplicação (Update ID: ${categoryId}). MSG: ${err2.message}`, { stack: err2.stack });
-          return res.status(500).json({ message: 'Erro ao verificar duplicação.', error: err2 });
+        logger.error(`[CATEGORIES - PUT] Erro na DB ao verificar duplicação (Update ID: ${categoryId}). MSG: ${err2.message}`, { stack: err2.stack });
+        return res.status(500).json({ message: 'Erro ao verificar duplicação.', error: err2 });
       }
+
       if (r2[0].cnt > 0) {
         logger.warn(`[CATEGORIES - PUT] Falha: Categoria '${name}' já existe no Estudo ID: ${studyId} (Colisão com ID: ${categoryId})`);
         return res.status(409).json({ message: 'Já existe uma categoria com esse nome neste estudo.' });
       }
 
-      // 3) atualizar
       const upd = `
         UPDATE categories
         SET name = ?, categoryType = ?, questionId = ?
         WHERE id = ?
       `;
+
       db.query(upd, [name, normalizedType, questionId, categoryId], (err3, r3) => {
         if (err3) {
-            logger.error(`[CATEGORIES - PUT] Erro na DB ao atualizar categoria ID: ${categoryId}. MSG: ${err3.message}`, { stack: err3.stack });
-            return res.status(500).json({ message: 'Erro ao atualizar categoria.', error: err3 });
+          logger.error(`[CATEGORIES - PUT] Erro na DB ao atualizar categoria ID: ${categoryId}. MSG: ${err3.message}`, { stack: err3.stack });
+          return res.status(500).json({ message: 'Erro ao atualizar categoria.', error: err3 });
         }
+
         if (r3.affectedRows === 0) {
-            logger.warn(`[CATEGORIES - PUT] Falha: Categoria ID: ${categoryId} não encontrada para atualização.`);
-            return res.status(404).json({ message: 'Categoria não encontrada.' });
+          logger.warn(`[CATEGORIES - PUT] Falha: Categoria ID: ${categoryId} não encontrada para atualização.`);
+          return res.status(404).json({ message: 'Categoria não encontrada.' });
         }
-        
+
         logger.info(`[CATEGORIES - PUT] Sucesso: Categoria ID: ${categoryId} atualizada com sucesso.`);
-        res.status(200).json({ message: 'Categoria atualizada com sucesso.' });
+        return res.status(200).json({ message: 'Categoria atualizada com sucesso.' });
       });
     });
   });

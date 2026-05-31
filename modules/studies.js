@@ -24,6 +24,8 @@ const { logger } = require('../utils/logger');
  *         description: Lista de estudos.
  *       400:
  *         description: Username não fornecido.
+ *       404:
+ *         description: Nenhum estudo encontrado para o investigador.
  *       500:
  *         description: Erro ao procurar estudos.
  */
@@ -52,8 +54,13 @@ router.get('/', (req, res) => {
             return res.status(500).json({ message: 'Erro ao obter estudos.', error: err });
         }
         
-        logger.debug(`[STUDIES - GET] Sucesso: ${results.length} estudos encontrados para o investigador ${username}.`);
-        res.status(200).json(results);
+    if (!results || results.length === 0) {
+        logger.warn(`[STUDIES - GET] Nenhum estudo encontrado para o investigador ${username}.`);
+        return res.status(404).json({ message: 'Nenhum estudo encontrado para este investigador.' });
+    }
+
+    logger.debug(`[STUDIES - GET] Sucesso: ${results.length} estudos encontrados para o investigador ${username}.`);
+    res.status(200).json(results);
     });
 });
 
@@ -83,6 +90,8 @@ router.get('/', (req, res) => {
  *         description: Estudo criado com sucesso.
  *       400:
  *         description: Campos obrigatórios em falta.
+ *       404:
+ *         description: Investigador não encontrado. 
  *       409:
  *         description: Estudo já existe.
  *       500:
@@ -91,7 +100,7 @@ router.get('/', (req, res) => {
 
 // 🔹 CRIAR ESTUDO
 router.post('/', (req, res) => {
-    const { name, obs, addedBy, minClassificationsPerPost, maxClassificationsPerUser,validationAgreementPercent } = req.body;
+    const { name, obs, addedBy, minClassificationsPerPost, maxClassificationsPerUser, validationAgreementPercent } = req.body;
 
     logger.info(`[STUDIES - POST] Pedido para criar o estudo '${name}' pelo investigador '${addedBy}'`);
 
@@ -100,30 +109,46 @@ router.post('/', (req, res) => {
         return res.status(400).json({ message: 'Campos obrigatórios em falta.' });
     }
 
-    const checkQuery = 'SELECT COUNT(*) AS count FROM study WHERE name = ?';
-    db.query(checkQuery, [name], (err, result) => {
-        if (err) {
-            logger.error(`[STUDIES - POST] Erro na BD ao verificar duplicação do estudo '${name}'. MSG: ${err.message}`, { stack: err.stack });
-            return res.status(500).json({ message: 'Erro ao verificar duplicação.' });
+    const userQuery = 'SELECT id FROM user WHERE username = ?';
+
+    db.query(userQuery, [addedBy], (userErr, userRows) => {
+        if (userErr) {
+            logger.error(`[STUDIES - POST] Erro na BD ao verificar investigador '${addedBy}'. MSG: ${userErr.message}`, { stack: userErr.stack });
+            return res.status(500).json({ message: 'Erro ao verificar investigador.', error: userErr });
         }
 
-        if (result[0].count > 0) {
-            logger.warn(`[STUDIES - POST] Falha: Tentativa de criar estudo com nome já existente ('${name}').`);
-            return res.status(409).json({ message: 'Estudo já existe.' });
+        if (!userRows || userRows.length === 0) {
+            logger.warn(`[STUDIES - POST] Falha: Investigador '${addedBy}' não encontrado.`);
+            return res.status(404).json({ message: 'Investigador não encontrado.' });
         }
 
-        const insertQuery = `
-            INSERT INTO study (name, obs, addedBy, startedAt, createdAt, minClassificationsPerPost, maxClassificationsPerUser, validationAgreementPercent)
-            VALUES (?, ?, ?, NOW(), NOW(), ?, ? , ?)
-        `;
-        db.query(insertQuery, [name, obs, addedBy, minClassificationsPerPost,maxClassificationsPerUser, validationAgreementPercent], (err) => {
+        const checkQuery = 'SELECT COUNT(*) AS count FROM study WHERE name = ?';
+
+        db.query(checkQuery, [name], (err, result) => {
             if (err) {
-                logger.error(`[STUDIES - POST] Erro na BD ao inserir o estudo '${name}'. MSG: ${err.message}`, { stack: err.stack });
-                return res.status(500).json({ message: 'Erro ao criar estudo.', error: err });
+                logger.error(`[STUDIES - POST] Erro na BD ao verificar duplicação do estudo '${name}'. MSG: ${err.message}`, { stack: err.stack });
+                return res.status(500).json({ message: 'Erro ao verificar duplicação.' });
             }
-            
-            logger.info(`[STUDIES - POST] Sucesso: Estudo '${name}' criado com sucesso por '${addedBy}'.`);
-            res.status(201).json({ message: 'Estudo criado com sucesso.' });
+
+            if (result[0].count > 0) {
+                logger.warn(`[STUDIES - POST] Falha: Tentativa de criar estudo com nome já existente ('${name}').`);
+                return res.status(409).json({ message: 'Estudo já existe.' });
+            }
+
+            const insertQuery = `
+                INSERT INTO study (name, obs, addedBy, startedAt, createdAt, minClassificationsPerPost, maxClassificationsPerUser, validationAgreementPercent)
+                VALUES (?, ?, ?, NOW(), NOW(), ?, ?, ?)
+            `;
+
+            db.query(insertQuery, [name, obs, addedBy, minClassificationsPerPost, maxClassificationsPerUser, validationAgreementPercent], (err) => {
+                if (err) {
+                    logger.error(`[STUDIES - POST] Erro na BD ao inserir o estudo '${name}'. MSG: ${err.message}`, { stack: err.stack });
+                    return res.status(500).json({ message: 'Erro ao criar estudo.', error: err });
+                }
+
+                logger.info(`[STUDIES - POST] Sucesso: Estudo '${name}' criado com sucesso por '${addedBy}'.`);
+                res.status(201).json({ message: 'Estudo criado com sucesso.' });
+            });
         });
     });
 });
@@ -158,6 +183,8 @@ router.post('/', (req, res) => {
  *     responses:
  *       200:
  *         description: Estudo atualizado com sucesso.
+ *       404:
+ *         description: Estudo não encontrado.
  *       409:
  *         description: Já existe outro estudo com esse nome.
  *       500:
@@ -220,11 +247,17 @@ router.put('/:studyId', (req, res) => {
             studyId
         ];
 
-        db.query(query, params, (err) => {
+        db.query(query, params, (err, result) => {
             if (err) {
                 logger.error(`[STUDIES - PUT] Erro na BD ao atualizar Estudo ID: ${studyId}. MSG: ${err.message}`, { stack: err.stack });
                 return res.status(500).json({ message: 'Erro ao atualizar estudo.', error: err });
             }
+
+            if (result.affectedRows === 0) {
+                logger.warn(`[STUDIES - PUT] Falha: Estudo ID ${studyId} não encontrado.`);
+                return res.status(404).json({ message: 'Estudo não encontrado.' });
+            }
+
             logger.info(`[STUDIES - PUT] Sucesso: Estudo ID: ${studyId} atualizado.`);
             res.status(200).json({ message: 'Estudo atualizado com sucesso.' });
         });
@@ -238,6 +271,7 @@ router.put('/:studyId', (req, res) => {
  *   delete:
  *     tags: [Studies]
  *     summary: Apagar estudo
+ *     description: Apaga um estudo, incluindo as perguntas e categorias associadas.
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -247,33 +281,202 @@ router.put('/:studyId', (req, res) => {
  *         schema: { type: integer }
  *     responses:
  *       200:
- *         description: Estudo apagado com sucesso.
+ *         description: Estudo, perguntas e categorias associadas apagados com sucesso.
+ *       400:
+ *         description: ID do estudo inválido.
  *       404:
  *         description: Estudo não encontrado.
  *       500:
  *         description: Erro ao apagar estudo.
  */
-
-// 🔹 APAGAR ESTUDO
 router.delete('/:studyId', (req, res) => {
-    const { studyId } = req.params;
+  const { studyId } = req.params;
 
-    logger.info(`[STUDIES - DELETE] Pedido para apagar Estudo ID: ${studyId}`);
+  logger.info(`[STUDIES - DELETE] Pedido para apagar Estudo ID: ${studyId}`);
 
-    db.query('DELETE FROM study WHERE id = ?', [studyId], (err, result) => {
-        if (err) {
-            logger.error(`[STUDIES - DELETE] Erro na BD ao apagar Estudo ID: ${studyId}. MSG: ${err.message}`, { stack: err.stack });
-            return res.status(500).json({ message: 'Erro ao apagar estudo.', error: err });
+  if (!studyId || isNaN(Number(studyId))) {
+    logger.warn(`[STUDIES - DELETE] Falha: ID inválido recebido (${studyId}).`);
+    return res.status(400).json({ message: 'ID do estudo inválido.' });
+  }
+
+  db.getConnection((connErr, connection) => {
+    if (connErr) {
+      logger.error(`[STUDIES - DELETE] Erro ao obter ligação à BD. MSG: ${connErr.message}`, {
+        stack: connErr.stack
+      });
+
+      return res.status(500).json({
+        message: 'Erro ao apagar estudo.',
+        error: connErr
+      });
+    }
+
+    connection.beginTransaction((txErr) => {
+      if (txErr) {
+        connection.release();
+
+        logger.error(`[STUDIES - DELETE] Erro ao iniciar transação. MSG: ${txErr.message}`, {
+          stack: txErr.stack
+        });
+
+        return res.status(500).json({
+          message: 'Erro ao apagar estudo.',
+          error: txErr
+        });
+      }
+
+      const checkStudyQuery = 'SELECT id FROM study WHERE id = ?';
+
+      connection.query(checkStudyQuery, [studyId], (checkErr, studyRows) => {
+        if (checkErr) {
+          return connection.rollback(() => {
+            connection.release();
+
+            logger.error(`[STUDIES - DELETE] Erro ao verificar Estudo ID: ${studyId}. MSG: ${checkErr.message}`, {
+              stack: checkErr.stack
+            });
+
+            return res.status(500).json({
+              message: 'Erro ao verificar estudo.',
+              error: checkErr
+            });
+          });
         }
 
-        if (result.affectedRows === 0) {
-            logger.warn(`[STUDIES - DELETE] Falha: Estudo ID: ${studyId} não encontrado.`);
-            return res.status(404).json({ message: 'Estudo não encontrado.' });
+        if (!studyRows || studyRows.length === 0) {
+          return connection.rollback(() => {
+            connection.release();
+
+            logger.warn(`[STUDIES - DELETE] Estudo ID ${studyId} não encontrado.`);
+
+            return res.status(404).json({
+              message: 'Estudo não encontrado.'
+            });
+          });
         }
 
-        logger.info(`[STUDIES - DELETE] Sucesso: Estudo ID: ${studyId} apagado com sucesso.`);
-        res.status(200).json({ message: 'Estudo apagado com sucesso.' });
+        const deleteCategoriesQuery = `
+          DELETE c
+          FROM categories c
+          INNER JOIN question q ON q.id = c.questionId
+          WHERE q.studyId = ?
+        `;
+
+        connection.query(deleteCategoriesQuery, [studyId], (catErr, catResult) => {
+          if (catErr) {
+            return connection.rollback(() => {
+              connection.release();
+
+              logger.error(`[STUDIES - DELETE] Erro ao apagar categorias do Estudo ID: ${studyId}. MSG: ${catErr.message}`, {
+                stack: catErr.stack
+              });
+
+              return res.status(500).json({
+                message: 'Erro ao apagar categorias associadas ao estudo.',
+                error: catErr
+              });
+            });
+          }
+
+          const deleteQuestionsQuery = 'DELETE FROM question WHERE studyId = ?';
+
+          connection.query(deleteQuestionsQuery, [studyId], (questionErr, questionResult) => {
+            if (questionErr) {
+              return connection.rollback(() => {
+                connection.release();
+
+                logger.error(`[STUDIES - DELETE] Erro ao apagar perguntas do Estudo ID: ${studyId}. MSG: ${questionErr.message}`, {
+                  stack: questionErr.stack
+                });
+
+                return res.status(500).json({
+                  message: 'Erro ao apagar perguntas associadas ao estudo.',
+                  error: questionErr
+                });
+              });
+            }
+
+            const deleteUserStudyQuery = 'DELETE FROM user_study WHERE studyId = ?';
+
+            connection.query(deleteUserStudyQuery, [studyId], (userStudyErr, userStudyResult) => {
+              if (userStudyErr) {
+                return connection.rollback(() => {
+                  connection.release();
+
+                  logger.error(`[STUDIES - DELETE] Erro ao apagar associações user_study do Estudo ID: ${studyId}. MSG: ${userStudyErr.message}`, {
+                    stack: userStudyErr.stack
+                  });
+
+                  return res.status(500).json({
+                    message: 'Erro ao apagar associações do estudo.',
+                    error: userStudyErr
+                  });
+                });
+              }
+
+              const deleteStudyQuery = 'DELETE FROM study WHERE id = ?';
+
+              connection.query(deleteStudyQuery, [studyId], (studyErr, studyResult) => {
+                if (studyErr) {
+                  return connection.rollback(() => {
+                    connection.release();
+
+                    logger.error(`[STUDIES - DELETE] Erro ao apagar Estudo ID: ${studyId}. MSG: ${studyErr.message}`, {
+                      stack: studyErr.stack
+                    });
+
+                    return res.status(500).json({
+                      message: 'Erro ao apagar estudo.',
+                      error: studyErr
+                    });
+                  });
+                }
+
+                if (studyResult.affectedRows === 0) {
+                  return connection.rollback(() => {
+                    connection.release();
+
+                    logger.warn(`[STUDIES - DELETE] Estudo ID ${studyId} não encontrado no momento da eliminação.`);
+
+                    return res.status(404).json({
+                      message: 'Estudo não encontrado.'
+                    });
+                  });
+                }
+
+                connection.commit((commitErr) => {
+                  if (commitErr) {
+                    return connection.rollback(() => {
+                      connection.release();
+
+                      logger.error(`[STUDIES - DELETE] Erro ao confirmar transação. MSG: ${commitErr.message}`, {
+                        stack: commitErr.stack
+                      });
+
+                      return res.status(500).json({
+                        message: 'Erro ao apagar estudo.',
+                        error: commitErr
+                      });
+                    });
+                  }
+
+                  connection.release();
+
+                  logger.info(
+                    `[STUDIES - DELETE] Sucesso: Estudo ID ${studyId} apagado. Categorias apagadas: ${catResult.affectedRows}. Perguntas apagadas: ${questionResult.affectedRows}. Associações user_study apagadas: ${userStudyResult.affectedRows}.`
+                  );
+
+                  return res.status(200).json({
+                    message: 'Estudo, perguntas e categorias associadas apagados com sucesso.'
+                  });
+                });
+              });
+            });
+          });
+        });
+      });
     });
+  });
 });
 
 /**
@@ -290,35 +493,40 @@ router.delete('/:studyId', (req, res) => {
  *     responses:
  *       200:
  *         description: Lista de estudos retornada com sucesso.
- *         content:
- *           application/json:
- *             schema:
- *               type: array
- *               items:
- *                 type: object
- *                 properties:
- *                   id:
- *                     type: integer
- *                     example: 4
- *                   name:
- *                     type: string
- *                     example: "Estudo Eleições 2026"
- *                   obs:
- *                     type: string
- *                     example: "Análise de publicações políticas"
+ *       400:
+ *         description: Utilizador autenticado inválido.
  *       401:
  *         description: Não autenticado (token inválido ou ausente).
+ *       404:
+ *         description: Nenhum estudo associado ao utilizador autenticado.
  *       500:
  *         description: Erro ao obter estudos do utilizador.
  */
 router.get('/user', (req, res) => {
-    const userId = req.user.id; 
+    const userId = req.user?.id || req.user?.userId;
 
-    logger.info(`[STUDIES - GET USER] Pedido para listar estudos associados ao UserID: ${userId}`);
+    logger.info(`[STUDIES - GET USER] Pedido para listar estudos associados ao UserID: ${userId || 'NÃO IDENTIFICADO'}`);
 
-    // JOIN entre study e user_study para saber quais os estudos deste user específico
+    if (!userId) {
+        logger.warn(`[STUDIES - GET USER] Falha: utilizador autenticado sem ID válido.`);
+        return res.status(400).json({
+            message: 'Utilizador autenticado inválido.'
+        });
+    }
+
     const query = `
-        SELECT s.id, s.name, s.obs
+        SELECT 
+            s.id,
+            s.name,
+            s.obs,
+            s.addedBy,
+            s.startedAt,
+            s.finishedAt,
+            s.createdAt,
+            s.updatedAt,
+            s.minClassificationsPerPost,
+            s.maxClassificationsPerUser,
+            s.validationAgreementPercent
         FROM study s
         INNER JOIN user_study us ON s.id = us.studyId
         WHERE us.userId = ?
@@ -327,15 +535,27 @@ router.get('/user', (req, res) => {
 
     db.query(query, [userId], (err, results) => {
         if (err) {
-            logger.error(`[STUDIES - GET USER] Erro na BD ao buscar estudos do participante UserID: ${userId}. MSG: ${err.message}`, { stack: err.stack });
-            return res.status(500).json({ 
-                message: 'Erro ao obter estudos do utilizador.', 
-                error: err 
+            logger.error(`[STUDIES - GET USER] Erro na BD ao buscar estudos do UserID: ${userId}. MSG: ${err.message}`, {
+                stack: err.stack
+            });
+
+            return res.status(500).json({
+                message: 'Erro ao obter estudos do utilizador.',
+                error: err
             });
         }
-        
-        logger.debug(`[STUDIES - GET USER] Sucesso: Encontrados ${results.length} estudos para o UserID: ${userId}`);
-        res.status(200).json(results);
+
+        if (!results || results.length === 0) {
+            logger.warn(`[STUDIES - GET USER] Nenhum estudo associado ao UserID: ${userId}.`);
+
+            return res.status(404).json({
+                message: 'Nenhum estudo associado a este utilizador.'
+            });
+        }
+
+        logger.debug(`[STUDIES - GET USER] Sucesso: Encontrados ${results.length} estudos para o UserID: ${userId}.`);
+
+        return res.status(200).json(results);
     });
 });
 

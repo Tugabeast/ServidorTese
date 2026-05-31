@@ -2,8 +2,158 @@ const express = require('express');
 const router = express.Router();
 const db = require('../config/db');
 
-// IMPORTAR O LOGGER
 const { logger } = require('../utils/logger');
+
+/**
+ * Função auxiliar com a lógica comum de validação.
+ *
+ * Regras:
+ * - Conta o número de utilizadores que responderam a cada par (post, pergunta).
+ * - Para perguntas de seleção múltipla:
+ *   valida todas as categorias que atingem a percentagem mínima de concordância.
+ * - Para perguntas de seleção única:
+ *   valida apenas a categoria mais votada, desde que não exista empate no primeiro lugar.
+ * - A resposta do utilizador é considerada validada apenas quando coincide com o conjunto validado.
+ */
+const validationCTE = `
+  WITH QuestionMode AS (
+    SELECT
+      id AS questionId,
+      CASE
+        WHEN LOWER(inputType) IN (
+          'checkbox',
+          'multiple',
+          'multi',
+          'multipla',
+          'múltipla',
+          'selecao multipla',
+          'seleção múltipla',
+          'seleção multipla',
+          'multiple choice'
+        )
+        THEN 1
+        ELSE 0
+      END AS isMultiple
+    FROM question
+  ),
+
+  StudyParams AS (
+    SELECT
+      p.id AS postId,
+      q.id AS questionId,
+      s.minClassificationsPerPost AS minCls,
+      s.validationAgreementPercent AS agreePct,
+      qm.isMultiple
+    FROM post p
+    JOIN study s ON s.id = p.studyId
+    JOIN question q ON q.studyId = s.id
+    JOIN QuestionMode qm ON qm.questionId = q.id
+  ),
+
+  Respondents AS (
+    SELECT
+      postId,
+      questionId,
+      COUNT(DISTINCT userId) AS totalUsers
+    FROM classification
+    GROUP BY postId, questionId
+  ),
+
+  CategoryCounts AS (
+    SELECT
+      postId,
+      questionId,
+      categoryId,
+      COUNT(DISTINCT userId) AS votes
+    FROM classification
+    GROUP BY postId, questionId, categoryId
+  ),
+
+  CategoryScores AS (
+    SELECT
+      cc.postId,
+      cc.questionId,
+      cc.categoryId,
+      cc.votes,
+      r.totalUsers,
+      sp.minCls,
+      sp.agreePct,
+      sp.isMultiple,
+      (cc.votes * 100.0 / r.totalUsers) AS agreementPercent
+    FROM CategoryCounts cc
+    JOIN Respondents r
+      ON r.postId = cc.postId
+     AND r.questionId = cc.questionId
+    JOIN StudyParams sp
+      ON sp.postId = cc.postId
+     AND sp.questionId = cc.questionId
+    WHERE r.totalUsers >= sp.minCls
+  ),
+
+  RankedSingle AS (
+    SELECT
+      cs.*,
+      RANK() OVER (
+        PARTITION BY cs.postId, cs.questionId
+        ORDER BY cs.votes DESC
+      ) AS categoryRank
+    FROM CategoryScores cs
+    WHERE cs.isMultiple = 0
+  ),
+
+  SingleValidated AS (
+    SELECT
+      rs.postId,
+      rs.questionId,
+      rs.categoryId
+    FROM RankedSingle rs
+    WHERE rs.categoryRank = 1
+      AND rs.agreementPercent >= rs.agreePct
+      AND NOT EXISTS (
+        SELECT 1
+        FROM RankedSingle other
+        WHERE other.postId = rs.postId
+          AND other.questionId = rs.questionId
+          AND other.categoryId <> rs.categoryId
+          AND other.votes = rs.votes
+      )
+  ),
+
+  MultipleValidated AS (
+    SELECT
+      cs.postId,
+      cs.questionId,
+      cs.categoryId
+    FROM CategoryScores cs
+    WHERE cs.isMultiple = 1
+      AND cs.agreementPercent >= cs.agreePct
+  ),
+
+  ValidatedCategories AS (
+    SELECT * FROM SingleValidated
+    UNION ALL
+    SELECT * FROM MultipleValidated
+  ),
+
+  ValidatedSets AS (
+    SELECT
+      postId,
+      questionId,
+      GROUP_CONCAT(categoryId ORDER BY categoryId SEPARATOR ',') AS validatedSet
+    FROM ValidatedCategories
+    GROUP BY postId, questionId
+  ),
+
+  UserSets AS (
+    SELECT
+      userId,
+      postId,
+      questionId,
+      GROUP_CONCAT(DISTINCT categoryId ORDER BY categoryId SEPARATOR ',') AS userSet
+    FROM classification
+    GROUP BY userId, postId, questionId
+  )
+`;
 
 /**
  * @openapi
@@ -11,283 +161,223 @@ const { logger } = require('../utils/logger');
  *   get:
  *     tags: [Stats]
  *     summary: Estatísticas do utilizador autenticado
- *     description: Devolve totais ponderados de classificações **validadas** vs **não validadas** para o utilizador autenticado (regra ≥3 votos iguais).
+ *     description: |
+ *       Devolve o número de classificações validadas e por validar do utilizador autenticado.
+ *       A validação é calculada com base nos parâmetros definidos em cada estudo:
+ *       número mínimo de classificações e percentagem mínima de concordância.
+ *       Em perguntas de seleção múltipla, a resposta validada pode corresponder a um conjunto de categorias.
+ *       Em perguntas de seleção única, é considerada apenas a categoria com maior concordância, desde que não exista empate.
  *     security:
  *       - bearerAuth: []
  *     responses:
  *       200:
- *         description: Totais do utilizador.
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 validated: { type: number, example: 12.5 }
- *                 not_validated: { type: number, example: 7.5 }
+ *         description: Estatísticas obtidas com sucesso.
+ *       404:
+ *         description: Nenhuma estatística encontrada para o utilizador autenticado.
  *       500:
- *         description: Erro ao procurar estatísticas.
+ *         description: Erro ao obter estatísticas.
  */
-
-//  ESTATÍSTICAS DO USER com sessao iniciada
 router.get('/user', (req, res) => {
   const username = req.user.username;
-  
+
   logger.info(`[STATS - GET USER] Pedido de estatísticas pessoais para o utilizador: ${username}`);
 
   const sql = `
-    /* Contagem por categoria dentro de cada (post, pergunta) */
-    WITH CatCounts AS (
-      SELECT c.postId, c.questionId, c.categoryId, COUNT(*) AS cnt
-      FROM classification c
-      GROUP BY c.postId, c.questionId, c.categoryId
-    ),
-    /* Total de votos por (post, pergunta) */
-    Totals AS (
-      SELECT postId, questionId, SUM(cnt) AS N
-      FROM CatCounts
-      GROUP BY postId, questionId
-    ),
-    /* Ranking das categorias por (post, pergunta) */
-    Ranked AS (
-      SELECT cc.postId, cc.questionId, cc.categoryId, cc.cnt,
-             RANK() OVER (PARTITION BY cc.postId, cc.questionId ORDER BY cc.cnt DESC) AS rnk
-      FROM CatCounts cc
-    ),
-    /* Apenas (post, pergunta) com top único (sem empate) */
-    TopUnique AS (
-      SELECT r.postId, r.questionId, r.categoryId, r.cnt
-      FROM Ranked r
-      JOIN (
-        SELECT postId, questionId
-        FROM Ranked
-        WHERE rnk = 1
-        GROUP BY postId, questionId
-        HAVING COUNT(*) = 1
-      ) t ON t.postId = r.postId AND t.questionId = r.questionId
-      WHERE r.rnk = 1
-    ),
-    /* Métricas do estudo por post */
-    StudyParams AS (
-      SELECT p.id AS postId,
-             s.minClassificationsPerPost AS minCls,
-             s.validationAgreementPercent AS agreePct
-      FROM post p
-      JOIN study s ON s.id = p.studyId
-    ),
-    /* (post, pergunta) validados segundo o estudo */
-    ValidatedQ AS (
-      SELECT tu.postId, tu.questionId, tu.categoryId AS topCategoryId
-      FROM TopUnique tu
-      JOIN Totals tot ON tot.postId = tu.postId AND tot.questionId = tu.questionId
-      JOIN StudyParams sp ON sp.postId = tu.postId
-      WHERE tot.N >= sp.minCls
-        AND (tu.cnt * 100.0 / tot.N) >= sp.agreePct
-    ),
-    /* Classificações do utilizador */
-    UserClass AS (
-      SELECT c.postId, c.questionId, c.categoryId
-      FROM classification c
-      JOIN user u ON u.id = c.userId
-      WHERE u.username = ?
-    ),
-    /* Total de respostas do user por (post, pergunta) */
-    UserQTotals AS (
-      SELECT postId, questionId, COUNT(*) AS userTotal
-      FROM UserClass
-      GROUP BY postId, questionId
-    ),
-    /* Nº de respostas do user que acertam no rótulo validado (uma ou zero por pergunta) */
-    UserQCorrect AS (
-      SELECT uc.postId, uc.questionId, COUNT(*) AS userCorrect
-      FROM UserClass uc
-      JOIN ValidatedQ vq
-        ON vq.postId = uc.postId
-       AND vq.questionId = uc.questionId
-       AND vq.topCategoryId = uc.categoryId
-      GROUP BY uc.postId, uc.questionId
-    ),
-    /* Peso por pergunta = acertos / total do user naquela pergunta */
-    Weights AS (
-      SELECT t.postId, t.questionId,
-             COALESCE(c.userCorrect, 0) * 1.0 / t.userTotal AS weight
-      FROM UserQTotals t
-      LEFT JOIN UserQCorrect c
-        ON c.postId = t.postId AND c.questionId = t.questionId
-    )
+    ${validationCTE}
+
     SELECT
-      COALESCE(SUM(weight), 0) AS validated,
-      (SELECT COUNT(*) FROM UserQTotals) - COALESCE(SUM(weight), 0) AS not_validated
-    FROM Weights;
+      COALESCE(SUM(CASE WHEN us.userSet = vs.validatedSet THEN 1 ELSE 0 END), 0) AS validated,
+      COALESCE(SUM(CASE WHEN us.userSet = vs.validatedSet THEN 0 ELSE 1 END), 0) AS not_validated
+    FROM UserSets us
+    JOIN user u ON u.id = us.userId
+    LEFT JOIN ValidatedSets vs
+      ON vs.postId = us.postId
+     AND vs.questionId = us.questionId
+    WHERE u.username = ?;
   `;
+
   db.query(sql, [username], (err, rows) => {
     if (err) {
-        logger.error(`[STATS - GET USER] Erro na BD ao calcular estatísticas para ${username}. MSG: ${err.message}`, { stack: err.stack });
-        return res.status(500).json({ message: 'Erro ao obter estatísticas.', error: err });
+      logger.error(`[STATS - GET USER] Erro na BD ao calcular estatísticas para ${username}. MSG: ${err.message}`, {
+        stack: err.stack,
+      });
+
+      return res.status(500).json({
+        message: 'Erro ao obter estatísticas.',
+        error: err,
+      });
     }
-    
+
     const stats = rows[0] || { validated: 0, not_validated: 0 };
-    logger.debug(`[STATS - GET USER] Sucesso: Estatísticas de ${username} geradas. Validadas: ${stats.validated}, Não Validadas: ${stats.not_validated}`);
-    
+
+    if (Number(stats.validated) === 0 && Number(stats.not_validated) === 0) {
+      logger.warn(`[STATS - GET USER] Nenhuma estatística encontrada para o utilizador: ${username}`);
+      return res.status(404).json({ message: 'Nenhuma estatística encontrada para este utilizador.' });
+    }
+
+    logger.debug(
+      `[STATS - GET USER] Sucesso: Estatísticas de ${username} geradas. Validadas: ${stats.validated}, Não Validadas: ${stats.not_validated}`
+    );
+
     res.status(200).json(stats);
   });
 });
-
-
 
 /**
  * @openapi
  * /stats/general:
  *   get:
  *     tags: [Stats]
- *     summary: Estatísticas gerais (anonimizadas)
- *     description: Estatísticas agregadas por utilizador com anonimização (mostra `username` apenas para o próprio e para investigadores).
+ *     summary: Estatísticas gerais dos utilizadores nos estudos do investigador autenticado
+ *     description: |
+ *       Devolve estatísticas agregadas por utilizador.
+ *       - Admin vê estatísticas de todos os estudos.
+ *       - Investigador vê apenas estatísticas dos estudos que criou.
+ *       - Utilizador comum vê apenas estatísticas dos estudos aos quais está associado.
  *     security:
  *       - bearerAuth: []
  *     responses:
  *       200:
- *         description: Lista de utilizadores com validações.
- *         content:
- *           application/json:
- *             schema:
- *               type: array
- *               items:
- *                 type: object
- *                 properties:
- *                   anonymizedUser: { type: string, example: "Utilizador 2" }
- *                   validated: { type: number, example: 10.75 }
- *                   not_validated: { type: number, example: 3.25 }
+ *         description: Estatísticas gerais obtidas com sucesso.
+ *       400:
+ *         description: Utilizador autenticado inválido.
+ *       404:
+ *         description: Nenhuma estatística encontrada.
  *       500:
- *         description: Erro ao procurar estatísticas.
+ *         description: Erro ao obter estatísticas.
  */
-
-// ESTATÍSTICAS DE TODOS os utilizadores com classificações feitas(ANONIMIZADAS)
-// ESTATÍSTICAS GERAIS (ANONIMIZADAS) - FILTRADAS POR ESTUDO COMUM
 router.get('/general', (req, res) => {
-    const loggedUser = req.user.username;
-    const userId = req.user.id; // <--- Precisamos do ID para verificar a tabela user_study
-    const userType = req.user.type;
-  
-    logger.info(`[STATS - GET GENERAL] Pedido de estatísticas gerais e anonimizadas pelo UserID: ${userId} (Tipo: ${userType})`);
+  const loggedUserId = req.user?.id || req.user?.userId;
 
-    const sql = `
-      /* Contagem por categoria dentro de cada (post, pergunta) */
-      WITH CatCounts AS (
-        SELECT c.postId, c.questionId, c.categoryId, COUNT(*) AS cnt
-        FROM classification c
-        GROUP BY c.postId, c.questionId, c.categoryId
-      ),
-      Totals AS (
-        SELECT postId, questionId, SUM(cnt) AS N
-        FROM CatCounts
-        GROUP BY postId, questionId
-      ),
-      Ranked AS (
-        SELECT cc.postId, cc.questionId, cc.categoryId, cc.cnt,
-               RANK() OVER (PARTITION BY cc.postId, cc.questionId ORDER BY cc.cnt DESC) AS rnk
-        FROM CatCounts cc
-      ),
-      TopUnique AS (
-        SELECT r.postId, r.questionId, r.categoryId, r.cnt
-        FROM Ranked r
-        JOIN (
-          SELECT postId, questionId
-          FROM Ranked
-          WHERE rnk = 1
-          GROUP BY postId, questionId
-          HAVING COUNT(*) = 1
-        ) t ON t.postId = r.postId AND t.questionId = r.questionId
-        WHERE r.rnk = 1
-      ),
-      StudyParams AS (
-        SELECT p.id AS postId,
-               s.minClassificationsPerPost AS minCls,
-               s.validationAgreementPercent AS agreePct
-        FROM post p
-        JOIN study s ON s.id = p.studyId
-      ),
-      ValidatedQ AS (
-        SELECT tu.postId, tu.questionId, tu.categoryId AS topCategoryId
-        FROM TopUnique tu
-        JOIN Totals tot ON tot.postId = tu.postId AND tot.questionId = tu.questionId
-        JOIN StudyParams sp ON sp.postId = tu.postId
-        WHERE tot.N >= sp.minCls
-          AND (tu.cnt * 100.0 / tot.N) >= sp.agreePct
-      ),
-      /* Totais do user por (post, pergunta) */
-      UserQTotals AS (
-        SELECT c.userId, c.postId, c.questionId, COUNT(*) AS total
-        FROM classification c
-        GROUP BY c.userId, c.postId, c.questionId
-      ),
-      /* Acertos do user por (post, pergunta) */
-      UserQCorrect AS (
-        SELECT c.userId, c.postId, c.questionId, COUNT(*) AS correct
-        FROM classification c
-        JOIN ValidatedQ vq
-          ON vq.postId = c.postId
-          AND vq.questionId = c.questionId
-          AND vq.topCategoryId = c.categoryId
-        GROUP BY c.userId, c.postId, c.questionId
-      ),
-      /* Score ponderado por pergunta e agregado por utilizador */
-      UserScores AS (
-        SELECT t.userId,
-               SUM(COALESCE(c.correct,0) * 1.0 / t.total) AS validated,
-               COUNT(*) - SUM(COALESCE(c.correct,0) * 1.0 / t.total) AS not_validated
-        FROM UserQTotals t
-        LEFT JOIN UserQCorrect c
-          ON c.userId = t.userId AND c.postId = t.postId AND c.questionId = t.questionId
-        GROUP BY t.userId
-      ),
-      /* Anonimização e FILTRAGEM POR ESTUDO */
-      Anonymized AS (
-        SELECT u.id AS userId,
-               CASE
-                 WHEN ? = 'investigator' THEN u.username
-                 WHEN u.username = ? THEN u.username
-                 ELSE CONCAT('Utilizador ', DENSE_RANK() OVER (ORDER BY u.id))
-               END AS anonymizedUser
-        FROM user u
-        WHERE u.id IN (SELECT DISTINCT userId FROM classification)
-        
-        /* NOVA CONDIÇÃO:
-           Só mostramos users que estejam num estudo partilhado com o user logado.
-           Se o user logado for 'investigator', mostra tudo.
-        */
-        AND (
-            ? = 'investigator'
-            OR EXISTS (
-                SELECT 1 
-                FROM user_study us_me
-                JOIN user_study us_other ON us_me.studyId = us_other.studyId
-                WHERE us_me.userId = ?    -- User Logado
-                  AND us_other.userId = u.id -- User da Lista
-            )
-        )
-      )
-      SELECT a.anonymizedUser,
-             ROUND(COALESCE(us.validated, 0), 2)     AS validated,
-             ROUND(COALESCE(us.not_validated, 0), 2) AS not_validated
-      FROM Anonymized a
-      LEFT JOIN UserScores us ON a.userId = us.userId;
-    `;
-  
-    // ATENÇÃO À ORDEM DOS PARÂMETROS:
-    // 1. userType (para o CASE)
-    // 2. loggedUser (para o CASE)
-    // 3. userType (para o WHERE do filtro)
-    // 4. userId (para o WHERE do filtro - user_study)
-    
-    db.query(sql, [userType, loggedUser, userType, userId], (err, rows) => {
-      if (err) {
-          logger.error(`[STATS - GET GENERAL] Erro na BD ao agregar estatísticas gerais para UserID: ${userId}. MSG: ${err.message}`, { stack: err.stack });
-          return res.status(500).json({ message: 'Erro ao obter estatísticas.', error: err });
-      }
+  logger.info(
+    `[STATS - GET GENERAL] Pedido de estatísticas gerais pelo UserID: ${loggedUserId || 'NÃO IDENTIFICADO'}`
+  );
 
-      logger.debug(`[STATS - GET GENERAL] Sucesso: Dados de ${rows.length} utilizadores processados e enviados para o UserID: ${userId}`);
-      res.status(200).json(rows);
+  if (!loggedUserId) {
+    logger.warn('[STATS - GET GENERAL] Falha: utilizador autenticado sem ID válido.');
+    return res.status(400).json({
+      message: 'Utilizador autenticado inválido.'
     });
+  }
+
+  const sql = `
+    ${validationCTE},
+
+    CurrentUser AS (
+      SELECT id, username, type
+      FROM user
+      WHERE id = ?
+    ),
+
+    RelevantStudies AS (
+      SELECT s.id
+      FROM study s
+      CROSS JOIN CurrentUser cu
+      WHERE
+        cu.type = 'admin'
+        OR (
+          cu.type = 'investigator'
+          AND s.addedBy = cu.username
+        )
+        OR (
+          cu.type NOT IN ('admin', 'investigator')
+          AND EXISTS (
+            SELECT 1
+            FROM user_study us_scope
+            WHERE us_scope.studyId = s.id
+              AND us_scope.userId = cu.id
+          )
+        )
+    ),
+
+    UserScores AS (
+      SELECT
+        user_sets.userId,
+        COALESCE(
+          SUM(
+            CASE 
+              WHEN user_sets.userSet = validated_sets.validatedSet 
+              THEN 1 
+              ELSE 0 
+            END
+          ), 
+          0
+        ) AS validated,
+        COALESCE(
+          SUM(
+            CASE 
+              WHEN user_sets.userSet = validated_sets.validatedSet 
+              THEN 0 
+              ELSE 1 
+            END
+          ), 
+          0
+        ) AS not_validated
+      FROM UserSets user_sets
+      INNER JOIN post p
+        ON p.id = user_sets.postId
+      INNER JOIN RelevantStudies rs
+        ON rs.id = p.studyId
+      LEFT JOIN ValidatedSets validated_sets
+        ON validated_sets.postId = user_sets.postId
+       AND validated_sets.questionId = user_sets.questionId
+      GROUP BY user_sets.userId
+    ),
+
+    Anonymized AS (
+      SELECT
+        u.id AS userId,
+        CASE
+          WHEN cu.type IN ('admin', 'investigator') THEN u.username
+          WHEN u.id = cu.id THEN u.username
+          ELSE CONCAT('Utilizador ', DENSE_RANK() OVER (ORDER BY u.id))
+        END AS anonymizedUser
+      FROM user u
+      CROSS JOIN CurrentUser cu
+      WHERE u.id IN (
+        SELECT DISTINCT userId
+        FROM UserScores
+      )
+    )
+
+    SELECT
+      a.anonymizedUser,
+      ROUND(COALESCE(us.validated, 0), 2) AS validated,
+      ROUND(COALESCE(us.not_validated, 0), 2) AS not_validated
+    FROM Anonymized a
+    INNER JOIN UserScores us
+      ON us.userId = a.userId
+    WHERE COALESCE(us.validated, 0) + COALESCE(us.not_validated, 0) > 0
+    ORDER BY a.anonymizedUser ASC;
+  `;
+
+  db.query(sql, [loggedUserId], (err, rows) => {
+    if (err) {
+      logger.error(`[STATS - GET GENERAL] Erro na BD ao calcular estatísticas gerais. MSG: ${err.message}`, {
+        stack: err.stack,
+      });
+
+      return res.status(500).json({
+        message: 'Erro ao obter estatísticas gerais.',
+        error: err,
+      });
+    }
+
+    if (!rows || rows.length === 0) {
+      logger.warn(`[STATS - GET GENERAL] Nenhuma estatística encontrada para os estudos do UserID: ${loggedUserId}.`);
+
+      return res.status(404).json({
+        message: 'Nenhuma estatística encontrada para os seus estudos.'
+      });
+    }
+
+    logger.debug(
+      `[STATS - GET GENERAL] Sucesso: ${rows.length} utilizadores processados para os estudos do UserID: ${loggedUserId}.`
+    );
+
+    return res.status(200).json(rows);
   });
+});
 
 /**
  * @openapi
@@ -295,57 +385,53 @@ router.get('/general', (req, res) => {
  *   get:
  *     tags: [Stats]
  *     summary: Obter timeline de atividade do utilizador autenticado
- *     description: |
- *       Retorna o número de classificações feitas pelo utilizador autenticado,
- *       agrupadas por dia (formato YYYY-MM-DD).
+ *     description: Retorna o número de classificações feitas pelo utilizador autenticado, agrupadas por dia.
  *     security:
  *       - bearerAuth: []
  *     responses:
  *       200:
- *         description: Timeline retornada com sucesso.
- *         content:
- *           application/json:
- *             schema:
- *               type: array
- *               items:
- *                 type: object
- *                 properties:
- *                   date:
- *                     type: string
- *                     example: "2026-02-20"
- *                   count:
- *                     type: integer
- *                     example: 15
- *       401:
- *         description: Não autenticado (token inválido ou ausente).
+ *         description: Timeline obtida com sucesso.
+ *       404:
+ *         description: Nenhuma atividade encontrada para o utilizador autenticado. 
  *       500:
  *         description: Erro ao obter timeline.
  */
 router.get('/timeline', (req, res) => {
-  const userId = req.user.id; // Assume que o ID vem no token
+  const userId = req.user.id || req.user.userId;
 
-  logger.info(`[STATS - GET TIMELINE] Pedido de atividade (timeline) para o UserID: ${userId}`);
+  logger.info(`[STATS - GET TIMELINE] Pedido de timeline para o UserID: ${userId}`);
 
   const sql = `
-    SELECT 
-      DATE_FORMAT(createdAt, '%Y-%m-%d') as date, 
-      COUNT(*) as count
+    SELECT
+      DATE_FORMAT(createdAt, '%Y-%m-%d') AS date,
+      COUNT(*) AS count
     FROM classification
     WHERE userId = ?
     GROUP BY DATE_FORMAT(createdAt, '%Y-%m-%d')
-    ORDER BY date ASC
+    ORDER BY date ASC;
   `;
 
   db.query(sql, [userId], (err, rows) => {
     if (err) {
-        logger.error(`[STATS - GET TIMELINE] Erro na BD ao buscar timeline do UserID: ${userId}. MSG: ${err.message}`, { stack: err.stack });
-        return res.status(500).json({ message: 'Erro ao obter timeline.', error: err });
+      logger.error(`[STATS - GET TIMELINE] Erro na BD ao obter timeline do UserID: ${userId}. MSG: ${err.message}`, {
+        stack: err.stack,
+      });
+
+      return res.status(500).json({
+        message: 'Erro ao obter timeline.',
+        error: err,
+      });
     }
-    
-    logger.debug(`[STATS - GET TIMELINE] Sucesso: Timeline retornada com ${rows.length} dias registados para o UserID: ${userId}`);
+
+    if (!rows || rows.length === 0) {
+      logger.warn(`[STATS - GET TIMELINE] Nenhuma atividade encontrada para o UserID: ${userId}`);
+      return res.status(404).json({ message: 'Nenhuma atividade encontrada para este utilizador.' });
+    }
+
+    logger.debug(`[STATS - GET TIMELINE] Sucesso: ${rows.length} dias encontrados para o UserID: ${userId}`);
+
     res.status(200).json(rows);
   });
 });
-
 
 module.exports = router;
